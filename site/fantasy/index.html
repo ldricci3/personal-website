@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e0e10">
+  <meta name="description" content="A live Sleeper draft companion with current and future fantasy football player values.">
+  <title>Fantasy Draft Guide — Leo Ricci</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-mobile-view="players">
+  <a class="skip-link" href="#player-list">Skip to player list</a>
+
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Leo Ricci home">LR</a>
+    <div>
+      <p class="eyebrow">Draft room</p>
+      <h1>Fantasy Draft Guide</h1>
+    </div>
+    <button id="manual-refresh" class="icon-button" type="button" aria-label="Refresh draft picks" title="Refresh draft picks">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+    </button>
+  </header>
+
+  <section class="draft-status" aria-live="polite" aria-atomic="true">
+    <span id="connection-dot" class="connection-dot idle" aria-hidden="true"></span>
+    <div class="status-copy">
+      <strong id="connection-status">Player values ready</strong>
+      <span id="connection-detail">Connect a Sleeper draft to track picks automatically.</span>
+    </div>
+    <div class="status-metrics">
+      <span><strong id="drafted-count">0</strong> drafted</span>
+      <span id="next-pick-status">No team selected</span>
+    </div>
+  </section>
+
+  <main class="app-shell">
+    <section class="workspace" aria-label="Player rankings">
+      <details class="setup-card" id="sleeper-setup">
+        <summary>
+          <span>
+            <span class="setup-title">Sleeper connection</span>
+            <span id="setup-summary" class="setup-summary">Not connected</span>
+          </span>
+          <span class="chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="setup-grid">
+          <div class="field-group league-field">
+            <label for="league-id">League ID</label>
+            <div class="input-action">
+              <input id="league-id" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Enter Sleeper league ID">
+              <button id="load-league" class="button secondary" type="button">Load league</button>
+            </div>
+            <p class="field-help">Saved only on this device.</p>
+          </div>
+
+          <div class="field-group">
+            <label for="draft-select">League draft</label>
+            <select id="draft-select" disabled>
+              <option value="">Load a league first</option>
+            </select>
+          </div>
+
+          <div class="field-group direct-draft-field">
+            <label for="draft-id">Draft ID <span>for standalone mocks</span></label>
+            <div class="input-action">
+              <input id="draft-id" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Enter draft ID">
+              <button id="load-draft" class="button secondary" type="button">Open draft</button>
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label for="team-select">My team</label>
+            <select id="team-select" disabled>
+              <option value="">Open a draft first</option>
+            </select>
+          </div>
+        </div>
+        <p id="setup-error" class="setup-error" role="alert" hidden></p>
+      </details>
+
+      <nav class="mobile-view-switch" aria-label="Draft guide view">
+        <button type="button" class="active" data-view="players" aria-pressed="true">Players</button>
+        <button type="button" data-view="roster" aria-pressed="false">My roster <span id="mobile-roster-count">0</span></button>
+      </nav>
+
+      <div class="players-panel">
+        <div class="player-toolbar">
+          <label class="search-control" for="player-search">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <span class="sr-only">Search players</span>
+            <input id="player-search" type="search" autocomplete="off" placeholder="Search player or team">
+          </label>
+
+          <label class="sort-control" for="sort-by">
+            <span>Sort</span>
+            <select id="sort-by">
+              <option value="rank">Overall rank</option>
+              <option value="beer">Current BEER+</option>
+              <option value="keeperTotal">Keeper total</option>
+              <option value="keeperR3">Round 3 option</option>
+              <option value="keeperR4">Round 4 option</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="filter-row">
+          <div class="position-tabs" role="group" aria-label="Filter by position">
+            <button type="button" class="active" data-position="ALL" aria-pressed="true">All</button>
+            <button type="button" data-position="QB" aria-pressed="false">QB</button>
+            <button type="button" data-position="RB" aria-pressed="false">RB</button>
+            <button type="button" data-position="WR" aria-pressed="false">WR</button>
+            <button type="button" data-position="TE" aria-pressed="false">TE</button>
+          </div>
+          <label class="toggle-control">
+            <input id="show-drafted" type="checkbox">
+            <span class="toggle" aria-hidden="true"></span>
+            <span>Show drafted</span>
+          </label>
+        </div>
+
+        <div class="value-legend" aria-label="Player value legend">
+          <span><i class="legend-current"></i>Current BEER+</span>
+          <span><i class="legend-future"></i>Keeper option</span>
+          <button id="value-help" class="text-button" type="button" aria-expanded="false" aria-controls="value-help-copy">How values work</button>
+        </div>
+        <p id="value-help-copy" class="value-help-copy" hidden>
+          Current BEER+ measures 2026 draft value. Keeper option is a separate, probability-weighted estimate of future surplus over a Round 3 or Round 4 pick. It is a tiebreaker, not a score to add blindly.
+        </p>
+
+        <div id="player-list" class="player-list" aria-live="polite" aria-busy="true"></div>
+        <p id="empty-state" class="empty-state" hidden>No players match these filters.</p>
+      </div>
+    </section>
+
+    <aside class="roster-panel" aria-label="My roster">
+      <div class="roster-heading">
+        <div>
+          <p class="eyebrow">Live lineup</p>
+          <h2>My roster</h2>
+        </div>
+        <span id="roster-count" class="roster-count">0 / 15</span>
+      </div>
+      <p id="roster-prompt" class="roster-prompt">Choose your Sleeper user or draft slot to populate this roster automatically.</p>
+      <div id="roster-slots" class="roster-slots"></div>
+      <div id="roster-extras" class="roster-extras" hidden>
+        <h3>Additional picks</h3>
+        <div id="roster-extras-list"></div>
+      </div>
+      <p class="roster-note">Players are assigned chronologically to the first eligible open spot. K and DEF picks appear even without value-model data.</p>
+    </aside>
+  </main>
+
+  <template id="loading-row-template">
+    <div class="player-card loading-row" aria-hidden="true">
+      <span></span><span></span><span></span>
+    </div>
+  </template>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

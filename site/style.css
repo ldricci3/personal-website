@@ -104,6 +104,10 @@ a:hover {
   transform: translateY(-2px);
 }
 
+.project-card + .project-card {
+  margin-top: 0.75rem;
+}
+
 .project-header {
   display: flex;
   align-items: center;
