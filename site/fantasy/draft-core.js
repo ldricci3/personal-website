@@ -282,6 +282,10 @@ export function nextPickStatus(picks, draft = {}, selection = {}) {
   const teams = numeric(draft?.settings?.teams);
   const rounds = numeric(draft?.settings?.rounds);
   if (!slot || !teams || !rounds) return null;
+  const status = String(draft?.status ?? '').toLowerCase();
+  if (status === 'pre_draft') {
+    return { unsupported: true, reason: 'draft has not started' };
+  }
   const type = String(draft?.type || 'snake').toLowerCase();
   if (!['snake', 'linear'].includes(type)) {
     return { unsupported: true, reason: `${type || 'unknown'} draft` };

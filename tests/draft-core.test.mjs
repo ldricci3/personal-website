@@ -196,6 +196,10 @@ test('calculates snake pick positions and next-pick status', () => {
   assert.equal(pickNumberForRound(2, 2, 4, 'linear'), 6);
   const status = nextPickStatus(picks.slice(0, 3), draft, { draftSlot: 1 });
   assert.deepEqual(status, { complete: false, currentPick: 3, nextPick: 8, picksAway: 4, onClock: false });
+  assert.deepEqual(nextPickStatus([], { ...draft, status: 'pre_draft' }, { draftSlot: 1 }), {
+    unsupported: true,
+    reason: 'draft has not started',
+  });
   assert.deepEqual(nextPickStatus([], { ...draft, type: 'auction' }, { draftSlot: 1 }), {
     unsupported: true,
     reason: 'auction draft',

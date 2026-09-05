@@ -39,7 +39,8 @@ const state = {
   drafts: [],
   users: [],
   draft: null,
-  teamSelectionValue: storageGet(localStorage, STORAGE.teamSelection),
+  teamSelectionValue: '',
+  teamSelectionDraftId: '',
   filters: {
     search: '',
     position: 'ALL',
@@ -48,6 +49,9 @@ const state = {
   },
   pollTimer: null,
   refreshing: false,
+  contextGeneration: 0,
+  leagueRequestId: 0,
+  refreshRequestId: 0,
   lastRefreshAt: 0,
   maxBeer: 1,
   maxKeeper: 1,
@@ -115,7 +119,12 @@ function formatProbability(value) {
 function formatTimestamp(timestamp) {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) return '';
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(date);
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
 }
 
 function setConnection(kind, title, detail) {
@@ -128,6 +137,10 @@ function setConnection(kind, title, detail) {
 function setSetupError(message = '') {
   elements.setupError.textContent = message;
   elements.setupError.hidden = !message;
+}
+
+function teamSelectionStorageKey(draftId) {
+  return `${STORAGE.teamSelection}.${draftId}`;
 }
 
 async function fetchJson(path) {
@@ -370,6 +383,13 @@ function renderTeamSelect() {
   select.append(slotGroup);
   select.disabled = !state.draft;
 
+  const draftId = String(state.draft?.draft_id ?? '');
+  if (state.teamSelectionDraftId !== draftId) {
+    state.teamSelectionDraftId = draftId;
+    state.teamSelectionValue = isValidSleeperId(draftId)
+      ? storageGet(localStorage, teamSelectionStorageKey(draftId))
+      : '';
+  }
   const validSelections = new Set([...userOptions, ...slotOptions].map((option) => option.value));
   if (!validSelections.has(state.teamSelectionValue)) state.teamSelectionValue = '';
   select.value = state.teamSelectionValue;
@@ -423,17 +443,35 @@ function readDraftCache(draftId) {
 
 function resetDraftRuntime() {
   stopPolling();
+  state.refreshRequestId += 1;
+  state.refreshing = false;
   state.draft = null;
   state.picks = [];
   state.picksSignature = '';
   state.pickedPlayerKeys = new Set();
   state.pickSource = 'none';
+  state.teamSelectionValue = '';
+  state.teamSelectionDraftId = '';
   state.lastRefreshAt = 0;
   elements.teamSelect.disabled = true;
   elements.teamSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Open a draft first', value: '' }));
   renderPlayers();
   renderRoster();
   renderDraftState();
+}
+
+function beginContextChange() {
+  state.contextGeneration += 1;
+  resetDraftRuntime();
+  return state.contextGeneration;
+}
+
+function isCurrentContext(generation) {
+  return generation === state.contextGeneration;
+}
+
+function isCurrentDraftRequest(generation, draftId) {
+  return isCurrentContext(generation) && String(state.draft?.draft_id ?? '') === String(draftId);
 }
 
 async function loadLeague({ autoOpenDraft = true } = {}) {
@@ -444,6 +482,13 @@ async function loadLeague({ autoOpenDraft = true } = {}) {
     return;
   }
 
+  const generation = beginContextChange();
+  const requestId = state.leagueRequestId + 1;
+  state.leagueRequestId = requestId;
+  state.league = null;
+  state.drafts = [];
+  state.users = [];
+  renderDraftState();
   setSetupError();
   setConnection('loading', 'Loading Sleeper league', 'Fetching league, users, and drafts…');
   elements.loadLeague.disabled = true;
@@ -453,8 +498,8 @@ async function loadLeague({ autoOpenDraft = true } = {}) {
       fetchJson(`/league/${leagueId}/drafts`),
       fetchJson(`/league/${leagueId}/users`),
     ]);
+    if (!isCurrentContext(generation)) return;
     if (!league || !isValidSleeperId(league.league_id)) throw new Error('Sleeper did not find that league.');
-    resetDraftRuntime();
     state.league = league;
     state.drafts = Array.isArray(drafts) ? drafts : [];
     state.users = Array.isArray(users) ? users : [];
@@ -466,25 +511,31 @@ async function loadLeague({ autoOpenDraft = true } = {}) {
     setConnection('idle', 'League loaded', state.drafts.length ? 'Choose a draft to begin live tracking.' : 'No drafts were returned for this league.');
     if (autoOpenDraft && selectedId) await loadDraft(selectedId);
   } catch (error) {
+    if (!isCurrentContext(generation)) return;
     setSetupError(error.message || 'The league could not be loaded.');
     setConnection('error', 'Sleeper connection failed', 'Check the league ID and your connection, then try again.');
   } finally {
-    elements.loadLeague.disabled = false;
+    if (requestId === state.leagueRequestId) elements.loadLeague.disabled = false;
   }
 }
 
 async function refreshPicks({ manual = false } = {}) {
   const draftId = String(state.draft?.draft_id ?? elements.draftId.value).trim();
   if (!isValidSleeperId(draftId) || state.refreshing || document.hidden) return;
+  const generation = state.contextGeneration;
+  const requestId = state.refreshRequestId + 1;
+  state.refreshRequestId = requestId;
   state.refreshing = true;
   if (manual) setConnection('loading', 'Refreshing draft picks', 'Checking Sleeper for the latest selections…');
   try {
     const response = await fetchJson(`/draft/${draftId}/picks`);
+    if (!isCurrentDraftRequest(generation, draftId)) return;
     const { picks, invalidCount } = normalizeDraftPicks(response);
     const now = Date.now();
     saveCachedPicks(localStorage, draftId, picks, now, { draft: state.draft, users: state.users });
     applyPicks(picks, 'live', now, invalidCount);
   } catch (error) {
+    if (!isCurrentDraftRequest(generation, draftId)) return;
     const cached = loadCachedPicks(localStorage, draftId);
     if (cached) {
       applyPicks(cached.picks, 'cache', cached.savedAt);
@@ -493,8 +544,10 @@ async function refreshPicks({ manual = false } = {}) {
       setConnection('error', 'Could not refresh picks', error.message || 'Try again in a moment.');
     }
   } finally {
-    state.refreshing = false;
-    elements.manualRefresh.classList.remove('is-loading');
+    if (requestId === state.refreshRequestId) {
+      state.refreshing = false;
+      elements.manualRefresh.classList.remove('is-loading');
+    }
   }
 }
 
@@ -510,6 +563,7 @@ function stopPolling() {
 }
 
 function forgetDraft() {
+  state.contextGeneration += 1;
   const draftIds = new Set([
     String(state.draft?.draft_id ?? ''),
     elements.draftId.value.trim(),
@@ -518,10 +572,15 @@ function forgetDraft() {
   try {
     for (let index = localStorage.length - 1; index >= 0; index -= 1) {
       const key = localStorage.key(index);
-      if (key?.startsWith('fantasyDraft.cache.')) storageRemove(localStorage, key);
+      if (key?.startsWith('fantasyDraft.cache.') || key?.startsWith(`${STORAGE.teamSelection}.`)) {
+        storageRemove(localStorage, key);
+      }
     }
   } catch {
-    for (const draftId of draftIds) storageRemove(localStorage, `fantasyDraft.cache.${draftId}`);
+    for (const draftId of draftIds) {
+      storageRemove(localStorage, `fantasyDraft.cache.${draftId}`);
+      storageRemove(localStorage, teamSelectionStorageKey(draftId));
+    }
   }
   storageRemove(localStorage, STORAGE.leagueId);
   storageRemove(localStorage, STORAGE.draftId);
@@ -550,7 +609,7 @@ async function loadDraft(explicitDraftId = '') {
     return;
   }
 
-  resetDraftRuntime();
+  const generation = beginContextChange();
   setSetupError();
   elements.draftId.value = draftId;
   if ([...elements.draftSelect.options].some((option) => option.value === draftId)) {
@@ -565,38 +624,49 @@ async function loadDraft(explicitDraftId = '') {
       fetchJson(`/draft/${draftId}`),
       fetchJson(`/draft/${draftId}/picks`),
     ]);
+    if (!isCurrentContext(generation)) return;
     if (!draft || !isValidSleeperId(draft.draft_id)) throw new Error('Sleeper did not find that draft.');
     const { picks, invalidCount } = normalizeDraftPicks(picksPayload);
-    state.draft = draft;
 
     const linkedLeagueId = String(draft.league_id ?? '');
-    if (isValidSleeperId(linkedLeagueId) && (!state.league || String(state.league.league_id) !== linkedLeagueId || !state.users.length)) {
+    let league = state.league;
+    let users = state.users;
+    if (isValidSleeperId(linkedLeagueId) && (!league || String(league.league_id) !== linkedLeagueId || !users.length)) {
       try {
-        const [league, users] = await Promise.all([
+        [league, users] = await Promise.all([
           fetchJson(`/league/${linkedLeagueId}`),
           fetchJson(`/league/${linkedLeagueId}/users`),
         ]);
-        state.league = league;
-        state.users = Array.isArray(users) ? users : [];
-        elements.leagueId.value = linkedLeagueId;
-        storageSet(localStorage, STORAGE.leagueId, linkedLeagueId);
+        if (!isCurrentContext(generation)) return;
+        users = Array.isArray(users) ? users : [];
       } catch {
-        state.league = null;
-        state.users = [];
+        if (!isCurrentContext(generation)) return;
+        league = null;
+        users = [];
       }
     } else if (!isValidSleeperId(linkedLeagueId)) {
-      state.league = null;
-      state.users = [];
+      league = null;
+      users = [];
+    }
+
+    if (!isCurrentContext(generation)) return;
+    state.draft = draft;
+    state.league = league;
+    state.users = users;
+    if (isValidSleeperId(linkedLeagueId) && league) {
+      elements.leagueId.value = linkedLeagueId;
+      storageSet(localStorage, STORAGE.leagueId, linkedLeagueId);
     }
 
     const now = Date.now();
     storageSet(localStorage, STORAGE.draftId, draftId);
-    saveCachedPicks(localStorage, draftId, picks, now, { draft: state.draft, users: state.users });
+    saveCachedPicks(localStorage, draftId, picks, now, { draft, users });
     applyPicks(picks, 'live', now, invalidCount);
     renderTeamSelect();
     elements.setup.open = false;
     startPolling();
   } catch (error) {
+    if (!isCurrentContext(generation)) return;
     state.draft = null;
     state.users = [];
     const cached = readDraftCache(draftId);
@@ -608,8 +678,10 @@ async function loadDraft(explicitDraftId = '') {
       setConnection('error', 'Sleeper connection failed', 'Check the draft ID and your connection, then try again.');
     }
   } finally {
-    elements.loadDraft.disabled = false;
-    renderDraftState();
+    if (isCurrentContext(generation)) {
+      elements.loadDraft.disabled = false;
+      renderDraftState();
+    }
   }
 }
 
@@ -630,7 +702,11 @@ function bindEvents() {
   });
   elements.teamSelect.addEventListener('change', () => {
     state.teamSelectionValue = elements.teamSelect.value;
-    storageSet(localStorage, STORAGE.teamSelection, state.teamSelectionValue);
+    const draftId = String(state.draft?.draft_id ?? '');
+    if (isValidSleeperId(draftId)) {
+      state.teamSelectionDraftId = draftId;
+      storageSet(localStorage, teamSelectionStorageKey(draftId), state.teamSelectionValue);
+    }
     renderRoster();
   });
   elements.manualRefresh.addEventListener('click', () => {
