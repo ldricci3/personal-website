@@ -61,6 +61,28 @@ export function isValidSleeperId(value) {
   return /^\d{1,30}$/.test(String(value ?? '').trim());
 }
 
+export function isValidDraftPick(pick) {
+  if (!pick || typeof pick !== 'object' || Array.isArray(pick)) return false;
+  const pickNumber = Number(pick.pick_no);
+  const playerId = String(pick.player_id ?? '').trim();
+  return Number.isInteger(pickNumber) && pickNumber > 0 && playerId.length > 0 && playerId.length <= 64;
+}
+
+export function normalizeDraftPicks(payload) {
+  if (!Array.isArray(payload)) throw new TypeError('Sleeper returned invalid pick data.');
+  const picks = payload.filter(isValidDraftPick);
+  if (payload.length > 0 && picks.length === 0) throw new TypeError('Sleeper returned invalid pick data.');
+  return { picks, invalidCount: payload.length - picks.length };
+}
+
+export function draftPicksSignature(picks = []) {
+  return picks
+    .map((pick) => [pick.pick_no, pick.player_id, pick.roster_id, pick.picked_by, pick.draft_slot]
+      .map((value) => String(value ?? '')).join(':'))
+    .sort()
+    .join('|');
+}
+
 export function metadataName(pick) {
   const metadata = pick?.metadata ?? {};
   return metadata.player_name
@@ -71,9 +93,9 @@ export function metadataName(pick) {
 }
 
 export function pickMatchesPlayer(pick, player) {
-  const pickId = String(pick?.player_id ?? '');
-  const sleeperId = String(player?.sleeperId ?? '');
-  if (pickId && sleeperId && pickId === sleeperId) return true;
+  const pickId = String(pick?.player_id ?? '').trim();
+  const sleeperId = String(player?.sleeperId ?? '').trim();
+  if (pickId && sleeperId) return pickId === sleeperId;
 
   const pickName = normalizeName(metadataName(pick));
   if (!pickName) return false;
@@ -97,9 +119,23 @@ export function playerKey(player) {
 
 export function getPickedPlayerKeys(players, picks) {
   const picked = new Set();
-  for (const player of players) {
-    if (picks.some((pick) => pickMatchesPlayer(pick, player))) {
-      picked.add(playerKey(player));
+  const playersBySleeperId = new Map(
+    players.filter((player) => player?.sleeperId).map((player) => [String(player.sleeperId), player]),
+  );
+  const playersWithoutIds = players.filter((player) => !player?.sleeperId);
+
+  for (const pick of picks) {
+    const pickId = String(pick?.player_id ?? '').trim();
+    if (pickId) {
+      const player = playersBySleeperId.get(pickId);
+      if (player) picked.add(playerKey(player));
+      for (const playerWithoutId of playersWithoutIds) {
+        if (pickMatchesPlayer(pick, playerWithoutId)) picked.add(playerKey(playerWithoutId));
+      }
+      continue;
+    }
+    for (const player of players) {
+      if (pickMatchesPlayer(pick, player)) picked.add(playerKey(player));
     }
   }
   return picked;
@@ -112,9 +148,10 @@ export function filterAndSortPlayers(players, options = {}) {
     sortBy = 'rank',
     showDrafted = false,
     picks = [],
+    pickedKeys: suppliedPickedKeys = null,
   } = options;
   const query = normalizeName(search);
-  const pickedKeys = getPickedPlayerKeys(players, picks);
+  const pickedKeys = suppliedPickedKeys instanceof Set ? suppliedPickedKeys : getPickedPlayerKeys(players, picks);
 
   return players
     .filter((player) => position === 'ALL' || normalizePosition(player.position) === normalizePosition(position))
@@ -127,9 +164,10 @@ export function filterAndSortPlayers(players, options = {}) {
     });
 }
 
-export function playerFromPick(pick, playerIndex = new Map()) {
+export function playerFromPick(pick, playerIndex = new Map(), players = []) {
   const sleeperId = String(pick?.player_id ?? '');
-  const modelPlayer = playerIndex.get(sleeperId);
+  const modelPlayer = playerIndex.get(sleeperId)
+    ?? players.find((player) => pickMatchesPlayer(pick, player));
   if (modelPlayer) {
     return { ...modelPlayer, pickNumber: numeric(pick.pick_no), rawPick: pick };
   }
@@ -150,11 +188,16 @@ export function playerFromPick(pick, playerIndex = new Map()) {
 }
 
 export function pickBelongsToSelection(pick, selection = {}) {
-  if (selection.userId) {
-    return String(pick?.picked_by ?? '') === String(selection.userId);
+  const selectedRosterId = String(selection.rosterId ?? '').trim();
+  const pickRosterId = String(pick?.roster_id ?? '').trim();
+  if (selectedRosterId && pickRosterId) return selectedRosterId === pickRosterId;
+
+  // Older/mock payloads may omit roster_id. Fall back only when one side lacks it.
+  if (selection.userId && pick?.picked_by) {
+    return String(pick.picked_by) === String(selection.userId);
   }
-  if (selection.draftSlot) {
-    return numeric(pick?.draft_slot) === numeric(selection.draftSlot);
+  if (selection.draftSlot && pick?.draft_slot !== undefined && pick?.draft_slot !== null) {
+    return numeric(pick.draft_slot) === numeric(selection.draftSlot);
   }
   return false;
 }
@@ -170,7 +213,7 @@ export function assignRosterSlots(picks, selection = {}, players = []) {
   const extras = [];
 
   for (const pick of selectedPicks) {
-    const player = playerFromPick(pick, playerIndex);
+    const player = playerFromPick(pick, playerIndex, players);
     const position = normalizePosition(player.position);
     const openSlot = slots.find((slot) => !slot.player && slot.accepts.includes(position));
     if (openSlot) openSlot.player = player;
@@ -191,7 +234,12 @@ export function selectDraftId(drafts, savedDraftId = '') {
 
 export function buildTeamOptions(users = [], draft = {}) {
   const order = draft?.draft_order ?? {};
+  const slotToRoster = draft?.slot_to_roster_id ?? {};
   const teams = numeric(draft?.settings?.teams, Math.max(Object.keys(order).length, 12));
+  const rosterIdForSlot = (slot) => {
+    const rosterId = slot ? slotToRoster[String(slot)] ?? slotToRoster[slot] : null;
+    return rosterId === undefined || rosterId === null || rosterId === '' ? null : String(rosterId);
+  };
   const userOptions = users.map((user) => {
     const slot = numeric(order[user.user_id]) || null;
     const displayName = user.display_name || user.username || `User ${user.user_id}`;
@@ -200,6 +248,7 @@ export function buildTeamOptions(users = [], draft = {}) {
       label: slot ? `${displayName} · Slot ${slot}` : displayName,
       userId: String(user.user_id),
       draftSlot: slot,
+      rosterId: rosterIdForSlot(slot),
     };
   });
   const slotOptions = Array.from({ length: teams }, (_, index) => ({
@@ -207,6 +256,7 @@ export function buildTeamOptions(users = [], draft = {}) {
     label: `Draft slot ${index + 1}`,
     userId: null,
     draftSlot: index + 1,
+    rosterId: rosterIdForSlot(index + 1),
   }));
   return { userOptions, slotOptions };
 }
@@ -214,7 +264,7 @@ export function buildTeamOptions(users = [], draft = {}) {
 export function resolveTeamSelection(value, users = [], draft = {}) {
   const { userOptions, slotOptions } = buildTeamOptions(users, draft);
   return [...userOptions, ...slotOptions].find((option) => option.value === value)
-    ?? { value: '', label: '', userId: null, draftSlot: null };
+    ?? { value: '', label: '', userId: null, draftSlot: null, rosterId: null };
 }
 
 export function pickNumberForRound(round, slot, teams, draftType = 'snake') {
@@ -232,8 +282,14 @@ export function nextPickStatus(picks, draft = {}, selection = {}) {
   const teams = numeric(draft?.settings?.teams);
   const rounds = numeric(draft?.settings?.rounds);
   if (!slot || !teams || !rounds) return null;
+  const type = String(draft?.type || 'snake').toLowerCase();
+  if (!['snake', 'linear'].includes(type)) {
+    return { unsupported: true, reason: `${type || 'unknown'} draft` };
+  }
+  if (numeric(draft?.settings?.reversal_round) > 0) {
+    return { unsupported: true, reason: 'custom reversal draft' };
+  }
   const currentPick = picks.reduce((max, pick) => Math.max(max, numeric(pick.pick_no)), 0);
-  const type = draft?.type || 'snake';
   const future = [];
   for (let round = 1; round <= rounds; round += 1) {
     const pickNumber = pickNumberForRound(round, slot, teams, type);
@@ -268,21 +324,41 @@ export function storageSet(storage, key, value) {
   }
 }
 
+export function storageRemove(storage, key) {
+  try {
+    storage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function loadCachedPicks(storage, draftId) {
   try {
     const raw = storage.getItem(`fantasyDraft.cache.${draftId}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed.picks) || !Number.isFinite(parsed.savedAt)) return null;
-    return parsed;
+    if (!Number.isFinite(parsed.savedAt)) return null;
+    const normalized = normalizeDraftPicks(parsed.picks);
+    const draft = parsed.draft && isValidSleeperId(parsed.draft.draft_id) ? parsed.draft : null;
+    const users = Array.isArray(parsed.users) ? parsed.users : [];
+    return { ...normalized, savedAt: parsed.savedAt, draft, users };
   } catch {
     return null;
   }
 }
 
-export function saveCachedPicks(storage, draftId, picks, now = Date.now()) {
+export function saveCachedPicks(storage, draftId, picks, now = Date.now(), snapshot = {}) {
   try {
-    storage.setItem(`fantasyDraft.cache.${draftId}`, JSON.stringify({ picks, savedAt: now }));
+    const normalized = normalizeDraftPicks(picks);
+    const draft = snapshot.draft && isValidSleeperId(snapshot.draft.draft_id) ? snapshot.draft : null;
+    const users = Array.isArray(snapshot.users) ? snapshot.users : [];
+    storage.setItem(`fantasyDraft.cache.${draftId}`, JSON.stringify({
+      picks: normalized.picks,
+      savedAt: now,
+      draft,
+      users,
+    }));
     return true;
   } catch {
     return false;

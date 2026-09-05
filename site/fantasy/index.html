@@ -79,6 +79,9 @@
             </select>
           </div>
         </div>
+        <div class="setup-actions">
+          <button id="forget-draft" class="text-button forget-button" type="button">Forget saved draft</button>
+        </div>
         <p id="setup-error" class="setup-error" role="alert" hidden></p>
       </details>
 
@@ -131,7 +134,7 @@
           Current BEER+ measures 2026 draft value. Keeper option is a separate, probability-weighted estimate of future surplus over a Round 3 or Round 4 pick. It is a tiebreaker, not a score to add blindly.
         </p>
 
-        <div id="player-list" class="player-list" aria-live="polite" aria-busy="true"></div>
+        <div id="player-list" class="player-list" aria-busy="true"></div>
         <p id="empty-state" class="empty-state" hidden>No players match these filters.</p>
       </div>
     </section>

@@ -18,11 +18,11 @@ export const players = [
 ];
 
 export const picks = [
-  { pick_no: 1, draft_slot: 2, picked_by: 'user-2', player_id: '102', metadata: { first_name: 'Beta', last_name: 'Runner', position: 'RB', team: 'DET' } },
-  { pick_no: 2, draft_slot: 1, picked_by: 'user-1', player_id: '103', metadata: { first_name: 'Gamma', last_name: 'Quarterback', position: 'QB', team: 'KC' } },
-  { pick_no: 3, draft_slot: 1, picked_by: 'user-1', player_id: '201', metadata: { first_name: 'Test', last_name: 'Kicker', position: 'K', team: 'NE' } },
-  { pick_no: 4, draft_slot: 1, picked_by: 'user-1', player_id: '104', metadata: { first_name: 'Delta', last_name: 'Tight End', position: 'TE', team: 'SF' } },
-  { pick_no: 5, draft_slot: 1, picked_by: 'user-1', player_id: '101', metadata: { first_name: 'Alpha', last_name: 'Receiver', position: 'WR', team: 'BUF' } },
+  { pick_no: 1, draft_slot: 2, roster_id: 22, picked_by: 'user-2', player_id: '102', metadata: { first_name: 'Beta', last_name: 'Runner', position: 'RB', team: 'DET' } },
+  { pick_no: 2, draft_slot: 1, roster_id: 11, picked_by: 'user-1', player_id: '103', metadata: { first_name: 'Gamma', last_name: 'Quarterback', position: 'QB', team: 'KC' } },
+  { pick_no: 3, draft_slot: 1, roster_id: 11, picked_by: 'user-1', player_id: '201', metadata: { first_name: 'Test', last_name: 'Kicker', position: 'K', team: 'NE' } },
+  { pick_no: 4, draft_slot: 1, roster_id: 11, picked_by: 'user-1', player_id: '104', metadata: { first_name: 'Delta', last_name: 'Tight End', position: 'TE', team: 'SF' } },
+  { pick_no: 5, draft_slot: 1, roster_id: 11, picked_by: 'user-1', player_id: '101', metadata: { first_name: 'Alpha', last_name: 'Receiver', position: 'WR', team: 'BUF' } },
 ];
 
 export const users = [
@@ -36,4 +36,5 @@ export const draft = {
   type: 'snake',
   settings: { teams: 4, rounds: 4 },
   draft_order: { 'user-1': 1, 'user-2': 2 },
+  slot_to_roster_id: { 1: 11, 2: 22, 3: 33, 4: 44 },
 };

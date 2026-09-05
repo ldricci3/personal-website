@@ -2,14 +2,18 @@ import {
   ROSTER_SLOTS,
   assignRosterSlots,
   buildTeamOptions,
+  draftPicksSignature,
   filterAndSortPlayers,
+  getPickedPlayerKeys,
   isValidSleeperId,
   loadCachedPicks,
   nextPickStatus,
+  normalizeDraftPicks,
   resolveTeamSelection,
   saveCachedPicks,
   selectDraftId,
   storageGet,
+  storageRemove,
   storageSet,
 } from './draft-core.js';
 
@@ -28,6 +32,9 @@ const state = {
   players: [],
   metadata: {},
   picks: [],
+  picksSignature: '',
+  pickedPlayerKeys: new Set(),
+  pickSource: 'none',
   league: null,
   drafts: [],
   users: [],
@@ -53,6 +60,7 @@ const elements = {
   draftId: document.querySelector('#draft-id'),
   loadDraft: document.querySelector('#load-draft'),
   teamSelect: document.querySelector('#team-select'),
+  forgetDraft: document.querySelector('#forget-draft'),
   setup: document.querySelector('#sleeper-setup'),
   setupSummary: document.querySelector('#setup-summary'),
   setupError: document.querySelector('#setup-error'),
@@ -186,6 +194,7 @@ function appendDetailRow(parent, label, value) {
 
 function buildPlayerCard(player) {
   const details = createElement('details', `player-card${player.drafted ? ' drafted' : ''}`);
+  details.dataset.playerKey = player.playerKey || player.modelKey || player.sleeperId || '';
   const summary = createElement('summary');
   summary.append(createElement('span', 'rank-number', player.overallRank));
 
@@ -240,12 +249,25 @@ function buildPlayerCard(player) {
 
 function renderPlayers() {
   if (!state.players.length) return;
-  const players = filterAndSortPlayers(state.players, { ...state.filters, picks: state.picks });
+  const openKeys = new Set(
+    [...elements.playerList.querySelectorAll('.player-card[open]')].map((card) => card.dataset.playerKey),
+  );
+  const focusedCard = document.activeElement?.closest?.('.player-card');
+  const focusedKey = focusedCard?.dataset.playerKey || '';
+  const players = filterAndSortPlayers(state.players, {
+    ...state.filters,
+    pickedKeys: state.pickedPlayerKeys,
+  });
   const fragment = document.createDocumentFragment();
   for (const player of players) fragment.append(buildPlayerCard(player));
   elements.playerList.replaceChildren(fragment);
   elements.playerList.setAttribute('aria-busy', 'false');
   elements.emptyState.hidden = players.length > 0;
+
+  for (const card of elements.playerList.querySelectorAll('.player-card')) {
+    if (openKeys.has(card.dataset.playerKey)) card.open = true;
+    if (focusedKey && card.dataset.playerKey === focusedKey) card.querySelector('summary')?.focus({ preventScroll: true });
+  }
 }
 
 function renderRosterPlayer(slot, player) {
@@ -273,7 +295,7 @@ function renderRoster() {
   elements.rosterSlots.replaceChildren(fragment);
   elements.rosterCount.textContent = `${Math.min(roster.pickCount, 15)} / 15`;
   elements.mobileRosterCount.textContent = String(roster.pickCount);
-  elements.rosterPrompt.hidden = Boolean(selection.userId || selection.draftSlot);
+  elements.rosterPrompt.hidden = Boolean(selection.rosterId || selection.userId || selection.draftSlot);
 
   const extrasFragment = document.createDocumentFragment();
   for (const player of roster.extras) {
@@ -289,6 +311,8 @@ function renderNextPick(selection = resolveTeamSelection(state.teamSelectionValu
   const status = nextPickStatus(state.picks, state.draft ?? {}, selection);
   if (!status) {
     elements.nextPickStatus.textContent = state.draft ? 'Select your team' : 'No team selected';
+  } else if (status.unsupported) {
+    elements.nextPickStatus.textContent = 'Next pick unavailable for this draft';
   } else if (status.complete) {
     elements.nextPickStatus.textContent = 'Your picks are complete';
   } else if (status.onClock) {
@@ -355,29 +379,61 @@ function renderTeamSelect() {
 function renderDraftState() {
   elements.draftedCount.textContent = String(state.picks.length);
   if (!state.draft) {
-    elements.setupSummary.textContent = state.league ? state.league.name || 'League loaded' : 'Not connected';
+    if (state.pickSource === 'cache') elements.setupSummary.textContent = 'Cached draft · offline';
+    else elements.setupSummary.textContent = state.league ? state.league.name || 'League loaded' : 'Not connected';
     return;
   }
   const draftName = state.draft.metadata?.name || `${state.draft.season || ''} draft`.trim() || 'Sleeper draft';
   elements.setupSummary.textContent = `${draftName} · ${state.draft.status || 'unknown status'}`;
 }
 
-function applyPicks(picks, source, savedAt = Date.now()) {
-  state.picks = Array.isArray(picks) ? picks : [];
+function applyPicks(picks, source, savedAt = Date.now(), invalidCount = 0) {
+  const signature = draftPicksSignature(picks);
+  const changed = signature !== state.picksSignature;
+  state.pickSource = source;
   state.lastRefreshAt = savedAt;
-  renderPlayers();
-  renderRoster();
+
+  if (changed) {
+    state.picks = picks;
+    state.picksSignature = signature;
+    state.pickedPlayerKeys = getPickedPlayerKeys(state.players, picks);
+    renderPlayers();
+    renderRoster();
+  }
   renderDraftState();
-  const detail = source === 'cache'
-    ? `Cached picks from ${formatTimestamp(savedAt)}. Reconnecting to Sleeper…`
-    : `Updated ${formatTimestamp(savedAt)} · ${state.picks.length} picks recorded`;
-  if (source === 'cache') setConnection('loading', 'Showing cached draft', detail);
-  else setConnection('live', 'Sleeper draft connected', detail);
+
+  const invalidNote = invalidCount ? ` · ${invalidCount} malformed pick${invalidCount === 1 ? '' : 's'} ignored` : '';
+  if (source === 'cache') {
+    setConnection('cached', 'Offline snapshot', `Last updated ${formatTimestamp(savedAt)} · not connected to Sleeper${invalidNote}`);
+  } else {
+    setConnection('live', 'Sleeper draft connected', `Updated ${formatTimestamp(savedAt)} · ${state.picks.length} picks recorded${invalidNote}`);
+  }
+  return changed;
 }
 
 function readDraftCache(draftId) {
   const cached = loadCachedPicks(localStorage, draftId);
-  if (cached) applyPicks(cached.picks, 'cache', cached.savedAt);
+  if (!cached) return null;
+  state.draft = cached.draft;
+  state.users = cached.users;
+  applyPicks(cached.picks, 'cache', cached.savedAt, cached.invalidCount);
+  if (state.draft) renderTeamSelect();
+  return cached;
+}
+
+function resetDraftRuntime() {
+  stopPolling();
+  state.draft = null;
+  state.picks = [];
+  state.picksSignature = '';
+  state.pickedPlayerKeys = new Set();
+  state.pickSource = 'none';
+  state.lastRefreshAt = 0;
+  elements.teamSelect.disabled = true;
+  elements.teamSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Open a draft first', value: '' }));
+  renderPlayers();
+  renderRoster();
+  renderDraftState();
 }
 
 async function loadLeague({ autoOpenDraft = true } = {}) {
@@ -398,19 +454,17 @@ async function loadLeague({ autoOpenDraft = true } = {}) {
       fetchJson(`/league/${leagueId}/users`),
     ]);
     if (!league || !isValidSleeperId(league.league_id)) throw new Error('Sleeper did not find that league.');
+    resetDraftRuntime();
     state.league = league;
     state.drafts = Array.isArray(drafts) ? drafts : [];
     state.users = Array.isArray(users) ? users : [];
     storageSet(localStorage, STORAGE.leagueId, leagueId);
     const preferred = elements.draftId.value.trim() || storageGet(localStorage, STORAGE.draftId);
     const selectedId = renderDraftSelect(preferred);
+    elements.draftId.value = selectedId;
     renderDraftState();
     setConnection('idle', 'League loaded', state.drafts.length ? 'Choose a draft to begin live tracking.' : 'No drafts were returned for this league.');
-    const draftToOpen = isValidSleeperId(preferred) ? preferred : selectedId;
-    if (autoOpenDraft && draftToOpen) {
-      elements.draftId.value = draftToOpen;
-      await loadDraft(draftToOpen);
-    }
+    if (autoOpenDraft && selectedId) await loadDraft(selectedId);
   } catch (error) {
     setSetupError(error.message || 'The league could not be loaded.');
     setConnection('error', 'Sleeper connection failed', 'Check the league ID and your connection, then try again.');
@@ -426,10 +480,10 @@ async function refreshPicks({ manual = false } = {}) {
   if (manual) setConnection('loading', 'Refreshing draft picks', 'Checking Sleeper for the latest selections…');
   try {
     const response = await fetchJson(`/draft/${draftId}/picks`);
-    const picks = Array.isArray(response) ? response : [];
+    const { picks, invalidCount } = normalizeDraftPicks(response);
     const now = Date.now();
-    saveCachedPicks(localStorage, draftId, picks, now);
-    applyPicks(picks, 'live', now);
+    saveCachedPicks(localStorage, draftId, picks, now, { draft: state.draft, users: state.users });
+    applyPicks(picks, 'live', now, invalidCount);
   } catch (error) {
     const cached = loadCachedPicks(localStorage, draftId);
     if (cached) {
@@ -455,6 +509,39 @@ function stopPolling() {
   state.pollTimer = null;
 }
 
+function forgetDraft() {
+  const draftIds = new Set([
+    String(state.draft?.draft_id ?? ''),
+    elements.draftId.value.trim(),
+    storageGet(localStorage, STORAGE.draftId),
+  ].filter(isValidSleeperId));
+  try {
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith('fantasyDraft.cache.')) storageRemove(localStorage, key);
+    }
+  } catch {
+    for (const draftId of draftIds) storageRemove(localStorage, `fantasyDraft.cache.${draftId}`);
+  }
+  storageRemove(localStorage, STORAGE.leagueId);
+  storageRemove(localStorage, STORAGE.draftId);
+  storageRemove(localStorage, STORAGE.teamSelection);
+
+  state.league = null;
+  state.drafts = [];
+  state.users = [];
+  state.teamSelectionValue = '';
+  elements.leagueId.value = '';
+  elements.draftId.value = '';
+  elements.draftSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Load a league first', value: '' }));
+  elements.draftSelect.disabled = true;
+  resetDraftRuntime();
+  setSetupError();
+  setConnection('idle', 'Draft forgotten', 'Player values remain available. Connect another Sleeper draft when ready.');
+  elements.setup.open = true;
+  elements.leagueId.focus();
+}
+
 async function loadDraft(explicitDraftId = '') {
   const draftId = String(explicitDraftId || elements.draftId.value).trim();
   if (!isValidSleeperId(draftId)) {
@@ -463,9 +550,8 @@ async function loadDraft(explicitDraftId = '') {
     return;
   }
 
-  stopPolling();
+  resetDraftRuntime();
   setSetupError();
-  storageSet(localStorage, STORAGE.draftId, draftId);
   elements.draftId.value = draftId;
   if ([...elements.draftSelect.options].some((option) => option.value === draftId)) {
     elements.draftSelect.value = draftId;
@@ -475,41 +561,49 @@ async function loadDraft(explicitDraftId = '') {
   elements.loadDraft.disabled = true;
 
   try {
-    const [draft, picks] = await Promise.all([
+    const [draft, picksPayload] = await Promise.all([
       fetchJson(`/draft/${draftId}`),
       fetchJson(`/draft/${draftId}/picks`),
     ]);
     if (!draft || !isValidSleeperId(draft.draft_id)) throw new Error('Sleeper did not find that draft.');
+    const { picks, invalidCount } = normalizeDraftPicks(picksPayload);
     state.draft = draft;
 
     const linkedLeagueId = String(draft.league_id ?? '');
     if (isValidSleeperId(linkedLeagueId) && (!state.league || String(state.league.league_id) !== linkedLeagueId || !state.users.length)) {
-      const [league, users] = await Promise.all([
-        fetchJson(`/league/${linkedLeagueId}`),
-        fetchJson(`/league/${linkedLeagueId}/users`),
-      ]);
-      state.league = league;
-      state.users = Array.isArray(users) ? users : [];
-      elements.leagueId.value = linkedLeagueId;
-      storageSet(localStorage, STORAGE.leagueId, linkedLeagueId);
+      try {
+        const [league, users] = await Promise.all([
+          fetchJson(`/league/${linkedLeagueId}`),
+          fetchJson(`/league/${linkedLeagueId}/users`),
+        ]);
+        state.league = league;
+        state.users = Array.isArray(users) ? users : [];
+        elements.leagueId.value = linkedLeagueId;
+        storageSet(localStorage, STORAGE.leagueId, linkedLeagueId);
+      } catch {
+        state.league = null;
+        state.users = [];
+      }
     } else if (!isValidSleeperId(linkedLeagueId)) {
+      state.league = null;
       state.users = [];
     }
 
-    const normalizedPicks = Array.isArray(picks) ? picks : [];
     const now = Date.now();
-    saveCachedPicks(localStorage, draftId, normalizedPicks, now);
-    applyPicks(normalizedPicks, 'live', now);
+    storageSet(localStorage, STORAGE.draftId, draftId);
+    saveCachedPicks(localStorage, draftId, picks, now, { draft: state.draft, users: state.users });
+    applyPicks(picks, 'live', now, invalidCount);
     renderTeamSelect();
     elements.setup.open = false;
     startPolling();
   } catch (error) {
-    const cached = loadCachedPicks(localStorage, draftId);
+    state.draft = null;
+    state.users = [];
+    const cached = readDraftCache(draftId);
     if (cached) {
-      applyPicks(cached.picks, 'cache', cached.savedAt);
-      setSetupError('Draft details could not be loaded. Cached picks are still available.');
+      setSetupError('Sleeper is unavailable. This offline snapshot may be out of date.');
+      setConnection('error', 'Offline snapshot', `Last updated ${formatTimestamp(cached.savedAt)} · not connected to Sleeper`);
     } else {
-      state.draft = null;
       setSetupError(error.message || 'The draft could not be loaded.');
       setConnection('error', 'Sleeper connection failed', 'Check the draft ID and your connection, then try again.');
     }
@@ -525,6 +619,7 @@ function bindEvents() {
     if (event.key === 'Enter') loadLeague();
   });
   elements.loadDraft.addEventListener('click', () => loadDraft());
+  elements.forgetDraft.addEventListener('click', forgetDraft);
   elements.draftId.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') loadDraft();
   });
