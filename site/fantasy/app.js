@@ -1,17 +1,27 @@
 import {
   ROSTER_SLOTS,
+  accountLeagueStorageKey,
   assignRosterSlots,
   buildTeamOptions,
+  chooseInitialConnection,
+  createContextGate,
   draftPicksSignature,
   filterAndSortPlayers,
   getPickedPlayerKeys,
+  isValidSleeperAccountInput,
   isValidSleeperId,
+  leagueDraftStorageKey,
   loadCachedPicks,
   nextPickStatus,
   normalizeDraftPicks,
+  normalizeSleeperAccount,
+  normalizeSleeperAccountInput,
+  normalizeSleeperDrafts,
+  normalizeSleeperLeagues,
   resolveTeamSelection,
   saveCachedPicks,
   selectDraftId,
+  selectLeagueId,
   storageGet,
   storageRemove,
   storageSet,
@@ -20,13 +30,19 @@ import {
 const API_BASE = 'https://api.sleeper.app/v1';
 const POLL_INTERVAL_MS = 5_000;
 const FETCH_TIMEOUT_MS = 8_000;
+const SEASON = '2026';
 const STORAGE = Object.freeze({
-  leagueId: 'fantasyDraft.leagueId',
-  draftId: 'fantasyDraft.draftId',
+  accountInput: 'fantasyDraft.accountInput',
+  accountId: 'fantasyDraft.accountId',
+  connectionMode: 'fantasyDraft.connectionMode',
+  manualDraftId: 'fantasyDraft.manualDraftId',
+  legacyLeagueId: 'fantasyDraft.leagueId',
+  legacyDraftId: 'fantasyDraft.draftId',
   teamSelection: 'fantasyDraft.teamSelection',
   showDrafted: 'fantasyDraft.showDrafted',
   sortBy: 'fantasyDraft.sortBy',
 });
+const contextGate = createContextGate();
 
 const state = {
   players: [],
@@ -35,6 +51,9 @@ const state = {
   picksSignature: '',
   pickedPlayerKeys: new Set(),
   pickSource: 'none',
+  connectionMode: 'none',
+  account: null,
+  leagues: [],
   league: null,
   drafts: [],
   users: [],
@@ -49,19 +68,22 @@ const state = {
   },
   pollTimer: null,
   refreshing: false,
-  contextGeneration: 0,
+  accountRequestId: 0,
   leagueRequestId: 0,
+  draftRequestId: 0,
   refreshRequestId: 0,
+  contextToken: 0,
   lastRefreshAt: 0,
   maxBeer: 1,
 };
 
 const elements = {
-  leagueId: document.querySelector('#league-id'),
-  loadLeague: document.querySelector('#load-league'),
+  accountInput: document.querySelector('#sleeper-account'),
+  loadAccount: document.querySelector('#load-account'),
+  leagueSelect: document.querySelector('#league-select'),
   draftSelect: document.querySelector('#draft-select'),
-  draftId: document.querySelector('#draft-id'),
-  loadDraft: document.querySelector('#load-draft'),
+  manualDraftId: document.querySelector('#manual-draft-id'),
+  loadManualDraft: document.querySelector('#load-manual-draft'),
   teamSelect: document.querySelector('#team-select'),
   forgetDraft: document.querySelector('#forget-draft'),
   setup: document.querySelector('#sleeper-setup'),
@@ -353,6 +375,26 @@ function renderNextPick(selection = resolveTeamSelection(state.teamSelectionValu
   }
 }
 
+function renderLeagueSelect(preferredLeagueId = '') {
+  const select = elements.leagueSelect;
+  const selectedId = selectLeagueId(state.leagues, preferredLeagueId);
+  const placeholder = createElement('option', '', state.leagues.length ? 'Choose a 2026 league' : 'No 2026 leagues found');
+  placeholder.value = '';
+  select.replaceChildren(placeholder);
+
+  for (const league of state.leagues) {
+    const option = createElement('option');
+    option.value = String(league.league_id);
+    const name = league.name || 'Sleeper league';
+    const status = String(league.status || '').replace('_', ' ');
+    option.textContent = `${name}${status ? ` · ${status}` : ''}`;
+    select.append(option);
+  }
+  select.disabled = state.leagues.length === 0;
+  select.value = selectedId;
+  return selectedId;
+}
+
 function renderDraftSelect(preferredDraftId = '') {
   const select = elements.draftSelect;
   const selectedId = selectDraftId(state.drafts, preferredDraftId);
@@ -410,6 +452,11 @@ function renderTeamSelect() {
   }
   const validSelections = new Set([...userOptions, ...slotOptions].map((option) => option.value));
   if (!validSelections.has(state.teamSelectionValue)) state.teamSelectionValue = '';
+  const accountSelection = state.account ? `user:${state.account.user_id}` : '';
+  if (!state.teamSelectionValue && validSelections.has(accountSelection)) {
+    state.teamSelectionValue = accountSelection;
+    storageSet(localStorage, teamSelectionStorageKey(draftId), accountSelection);
+  }
   select.value = state.teamSelectionValue;
   renderRoster();
 }
@@ -418,7 +465,9 @@ function renderDraftState() {
   elements.draftedCount.textContent = String(state.picks.length);
   if (!state.draft) {
     if (state.pickSource === 'cache') elements.setupSummary.textContent = 'Cached draft · offline';
-    else elements.setupSummary.textContent = state.league ? state.league.name || 'League loaded' : 'Not connected';
+    else if (state.league) elements.setupSummary.textContent = state.league.name || 'League loaded';
+    else if (state.account) elements.setupSummary.textContent = `${state.account.display_name || state.account.username || 'Sleeper account'} · choose a league`;
+    else elements.setupSummary.textContent = 'Not connected';
     return;
   }
   const draftName = state.draft.metadata?.name || `${state.draft.season || ''} draft`.trim() || 'Sleeper draft';
@@ -449,11 +498,11 @@ function applyPicks(picks, source, savedAt = Date.now(), invalidCount = 0) {
   return changed;
 }
 
-function readDraftCache(draftId) {
+function readDraftCache(draftId, { preserveUsers = false } = {}) {
   const cached = loadCachedPicks(localStorage, draftId);
   if (!cached) return null;
   state.draft = cached.draft;
-  state.users = cached.users;
+  if (!preserveUsers) state.users = cached.users;
   applyPicks(cached.picks, 'cache', cached.savedAt, cached.invalidCount);
   if (state.draft) renderTeamSelect();
   return cached;
@@ -479,37 +528,113 @@ function resetDraftRuntime() {
 }
 
 function beginContextChange() {
-  state.contextGeneration += 1;
+  const generation = contextGate.begin();
+  state.contextToken = generation;
   resetDraftRuntime();
-  return state.contextGeneration;
+  return generation;
 }
 
 function isCurrentContext(generation) {
-  return generation === state.contextGeneration;
+  return contextGate.isCurrent(generation);
 }
 
 function isCurrentDraftRequest(generation, draftId) {
   return isCurrentContext(generation) && String(state.draft?.draft_id ?? '') === String(draftId);
 }
 
-async function loadLeague({ autoOpenDraft = true } = {}) {
-  const leagueId = elements.leagueId.value.trim();
-  if (!isValidSleeperId(leagueId)) {
-    setSetupError('League ID must contain only numbers.');
-    elements.leagueId.focus();
+async function loadAccount() {
+  const accountInput = normalizeSleeperAccountInput(elements.accountInput.value);
+  if (!isValidSleeperAccountInput(accountInput)) {
+    setSetupError('Enter a valid Sleeper username or numeric user ID.');
+    elements.accountInput.focus();
+    return;
+  }
+
+  const generation = beginContextChange();
+  const requestId = state.accountRequestId + 1;
+  state.accountRequestId = requestId;
+  state.leagueRequestId += 1;
+  state.draftRequestId += 1;
+  elements.loadManualDraft.disabled = false;
+  state.connectionMode = 'account';
+  state.account = null;
+  state.leagues = [];
+  state.league = null;
+  state.drafts = [];
+  state.users = [];
+  elements.leagueSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Finding leagues…', value: '' }));
+  elements.leagueSelect.disabled = true;
+  elements.draftSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Choose a league first', value: '' }));
+  elements.draftSelect.disabled = true;
+  renderDraftState();
+  setSetupError();
+  setConnection('loading', 'Finding Sleeper account', `Loading ${SEASON} NFL leagues…`);
+  elements.loadAccount.disabled = true;
+
+  try {
+    const accountPayload = await fetchJson(`/user/${encodeURIComponent(accountInput)}`);
+    if (!isCurrentContext(generation)) return;
+    const account = normalizeSleeperAccount(accountPayload);
+    const leaguePayload = await fetchJson(`/user/${account.user_id}/leagues/nfl/${SEASON}`);
+    if (!isCurrentContext(generation)) return;
+    const leagues = normalizeSleeperLeagues(leaguePayload, SEASON);
+
+    state.account = account;
+    state.leagues = leagues;
+    storageSet(localStorage, STORAGE.accountInput, accountInput);
+    storageSet(localStorage, STORAGE.accountId, account.user_id);
+    storageSet(localStorage, STORAGE.connectionMode, 'account');
+
+    const preferredKey = accountLeagueStorageKey(account.user_id);
+    const preferredLeagueId = preferredKey ? storageGet(localStorage, preferredKey) : '';
+    const selectedLeagueId = renderLeagueSelect(preferredLeagueId);
+    renderDraftState();
+
+    if (!leagues.length) {
+      elements.setup.open = true;
+      setConnection('idle', 'Sleeper account found', `No ${SEASON} NFL leagues were returned for this account.`);
+    } else if (selectedLeagueId) {
+      await loadLeague(selectedLeagueId);
+    } else {
+      elements.setup.open = true;
+      setConnection('idle', 'Sleeper account found', 'Choose a league to open its current draft.');
+    }
+  } catch (error) {
+    if (!isCurrentContext(generation)) return;
+    elements.setup.open = true;
+    setSetupError(error.message || 'The Sleeper account could not be loaded.');
+    setConnection('error', 'Sleeper connection failed', 'Check the username or user ID and your connection, then try again.');
+  } finally {
+    if (requestId === state.accountRequestId) elements.loadAccount.disabled = false;
+  }
+}
+
+async function loadLeague(explicitLeagueId = '') {
+  const leagueId = String(explicitLeagueId || elements.leagueSelect.value).trim();
+  const knownLeague = state.leagues.find((league) => String(league.league_id) === leagueId);
+  if (!state.account || !knownLeague || !isValidSleeperId(leagueId)) {
+    setSetupError('Choose a league from this Sleeper account.');
+    elements.leagueSelect.focus();
     return;
   }
 
   const generation = beginContextChange();
   const requestId = state.leagueRequestId + 1;
   state.leagueRequestId = requestId;
+  state.draftRequestId += 1;
+  elements.loadManualDraft.disabled = false;
+  state.connectionMode = 'account';
   state.league = null;
   state.drafts = [];
   state.users = [];
+  elements.leagueSelect.value = leagueId;
+  elements.leagueSelect.disabled = true;
+  elements.draftSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Finding drafts…', value: '' }));
+  elements.draftSelect.disabled = true;
   renderDraftState();
   setSetupError();
   setConnection('loading', 'Loading Sleeper league', 'Fetching league, users, and drafts…');
-  elements.loadLeague.disabled = true;
+
   try {
     const [league, drafts, users] = await Promise.all([
       fetchJson(`/league/${leagueId}`),
@@ -518,29 +643,37 @@ async function loadLeague({ autoOpenDraft = true } = {}) {
     ]);
     if (!isCurrentContext(generation)) return;
     if (!league || !isValidSleeperId(league.league_id)) throw new Error('Sleeper did not find that league.');
+
     state.league = league;
-    state.drafts = Array.isArray(drafts) ? drafts : [];
+    state.drafts = normalizeSleeperDrafts(drafts);
     state.users = Array.isArray(users) ? users : [];
-    storageSet(localStorage, STORAGE.leagueId, leagueId);
-    const preferred = elements.draftId.value.trim() || storageGet(localStorage, STORAGE.draftId);
-    const selectedId = renderDraftSelect(preferred);
-    elements.draftId.value = selectedId;
+    const accountLeagueKey = accountLeagueStorageKey(state.account.user_id);
+    if (accountLeagueKey) storageSet(localStorage, accountLeagueKey, leagueId);
+    const draftKey = leagueDraftStorageKey(leagueId);
+    const preferredDraftId = draftKey ? storageGet(localStorage, draftKey) : '';
+    const selectedDraftId = renderDraftSelect(preferredDraftId);
     renderDraftState();
-    setConnection('idle', 'League loaded', state.drafts.length ? 'Choose a draft to begin live tracking.' : 'No drafts were returned for this league.');
-    if (autoOpenDraft && selectedId) await loadDraft(selectedId);
+
+    if (selectedDraftId) {
+      await loadDraft(selectedDraftId, { source: 'league' });
+    } else {
+      elements.setup.open = true;
+      setConnection('idle', 'League loaded', 'No drafts were returned for this league. You can still open a standalone mock below.');
+    }
   } catch (error) {
     if (!isCurrentContext(generation)) return;
+    elements.setup.open = true;
     setSetupError(error.message || 'The league could not be loaded.');
-    setConnection('error', 'Sleeper connection failed', 'Check the league ID and your connection, then try again.');
+    setConnection('error', 'Sleeper connection failed', 'Choose another league or try again.');
   } finally {
-    if (requestId === state.leagueRequestId) elements.loadLeague.disabled = false;
+    if (requestId === state.leagueRequestId) elements.leagueSelect.disabled = state.leagues.length === 0;
   }
 }
 
 async function refreshPicks({ manual = false } = {}) {
-  const draftId = String(state.draft?.draft_id ?? elements.draftId.value).trim();
+  const draftId = String(state.draft?.draft_id ?? '').trim();
   if (!isValidSleeperId(draftId) || state.refreshing || document.hidden) return;
-  const generation = state.contextGeneration;
+  const generation = state.contextToken;
   const requestId = state.refreshRequestId + 1;
   state.refreshRequestId = requestId;
   state.refreshing = true;
@@ -581,61 +714,94 @@ function stopPolling() {
 }
 
 function forgetDraft() {
-  state.contextGeneration += 1;
-  const draftIds = new Set([
-    String(state.draft?.draft_id ?? ''),
-    elements.draftId.value.trim(),
-    storageGet(localStorage, STORAGE.draftId),
-  ].filter(isValidSleeperId));
+  state.contextToken = contextGate.begin();
+  state.accountRequestId += 1;
+  state.leagueRequestId += 1;
+  state.draftRequestId += 1;
+  const removablePrefixes = [
+    'fantasyDraft.cache.',
+    `${STORAGE.teamSelection}.`,
+    'fantasyDraft.account.',
+    'fantasyDraft.league.',
+  ];
+  const removableKeys = new Set([
+    STORAGE.accountInput,
+    STORAGE.accountId,
+    STORAGE.connectionMode,
+    STORAGE.manualDraftId,
+    STORAGE.legacyLeagueId,
+    STORAGE.legacyDraftId,
+    STORAGE.teamSelection,
+  ]);
   try {
     for (let index = localStorage.length - 1; index >= 0; index -= 1) {
       const key = localStorage.key(index);
-      if (key?.startsWith('fantasyDraft.cache.') || key?.startsWith(`${STORAGE.teamSelection}.`)) {
+      if (key && (removableKeys.has(key) || removablePrefixes.some((prefix) => key.startsWith(prefix)))) {
         storageRemove(localStorage, key);
       }
     }
   } catch {
-    for (const draftId of draftIds) {
-      storageRemove(localStorage, `fantasyDraft.cache.${draftId}`);
-      storageRemove(localStorage, teamSelectionStorageKey(draftId));
-    }
+    for (const key of removableKeys) storageRemove(localStorage, key);
   }
-  storageRemove(localStorage, STORAGE.leagueId);
-  storageRemove(localStorage, STORAGE.draftId);
-  storageRemove(localStorage, STORAGE.teamSelection);
 
+  state.connectionMode = 'none';
+  elements.loadAccount.disabled = false;
+  elements.loadManualDraft.disabled = false;
+  state.account = null;
+  state.leagues = [];
   state.league = null;
   state.drafts = [];
   state.users = [];
   state.teamSelectionValue = '';
-  elements.leagueId.value = '';
-  elements.draftId.value = '';
-  elements.draftSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Load a league first', value: '' }));
+  elements.accountInput.value = '';
+  elements.manualDraftId.value = '';
+  elements.leagueSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Find your account first', value: '' }));
+  elements.leagueSelect.disabled = true;
+  elements.draftSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Choose a league first', value: '' }));
   elements.draftSelect.disabled = true;
   resetDraftRuntime();
   setSetupError();
   setConnection('idle', 'Draft forgotten', 'Player values remain available. Connect another Sleeper draft when ready.');
   elements.setup.open = true;
-  elements.leagueId.focus();
+  elements.accountInput.focus();
 }
 
-async function loadDraft(explicitDraftId = '') {
-  const draftId = String(explicitDraftId || elements.draftId.value).trim();
+async function loadDraft(explicitDraftId = '', { source = 'manual' } = {}) {
+  const draftId = String(explicitDraftId || elements.manualDraftId.value).trim();
   if (!isValidSleeperId(draftId)) {
     setSetupError('Draft ID must contain only numbers.');
-    elements.draftId.focus();
+    if (source === 'manual') elements.manualDraftId.focus();
     return;
   }
 
   const generation = beginContextChange();
-  setSetupError();
-  elements.draftId.value = draftId;
-  if ([...elements.draftSelect.options].some((option) => option.value === draftId)) {
+  const requestId = state.draftRequestId + 1;
+  state.draftRequestId = requestId;
+  const isManual = source === 'manual';
+  if (isManual) {
+    state.accountRequestId += 1;
+    state.leagueRequestId += 1;
+    state.connectionMode = 'manual';
+    elements.loadAccount.disabled = false;
+    state.account = null;
+    state.leagues = [];
+    state.league = null;
+    state.drafts = [];
+    state.users = [];
+    elements.manualDraftId.value = draftId;
+    elements.leagueSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Standalone mock opened', value: '' }));
+    elements.leagueSelect.disabled = true;
+    elements.draftSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Standalone mock opened', value: '' }));
+    elements.draftSelect.disabled = true;
+  } else if ([...elements.draftSelect.options].some((option) => option.value === draftId)) {
     elements.draftSelect.value = draftId;
+    elements.draftSelect.disabled = true;
   }
-  readDraftCache(draftId);
+
+  setSetupError();
+  readDraftCache(draftId, { preserveUsers: !isManual });
   setConnection('loading', 'Opening Sleeper draft', 'Loading draft details and picks…');
-  elements.loadDraft.disabled = true;
+  if (isManual) elements.loadManualDraft.disabled = true;
 
   try {
     const [draft, picksPayload] = await Promise.all([
@@ -671,13 +837,17 @@ async function loadDraft(explicitDraftId = '') {
     state.draft = draft;
     state.league = league;
     state.users = users;
-    if (isValidSleeperId(linkedLeagueId) && league) {
-      elements.leagueId.value = linkedLeagueId;
-      storageSet(localStorage, STORAGE.leagueId, linkedLeagueId);
+
+    if (isManual) {
+      storageSet(localStorage, STORAGE.manualDraftId, draftId);
+      storageSet(localStorage, STORAGE.connectionMode, 'manual');
+    } else {
+      const leagueId = String(state.league?.league_id ?? linkedLeagueId);
+      const draftKey = leagueDraftStorageKey(leagueId);
+      if (draftKey) storageSet(localStorage, draftKey, draftId);
     }
 
     const now = Date.now();
-    storageSet(localStorage, STORAGE.draftId, draftId);
     saveCachedPicks(localStorage, draftId, picks, now, { draft, users });
     applyPicks(picks, 'live', now, invalidCount);
     renderTeamSelect();
@@ -685,39 +855,43 @@ async function loadDraft(explicitDraftId = '') {
     startPolling();
   } catch (error) {
     if (!isCurrentContext(generation)) return;
+    elements.setup.open = true;
     state.draft = null;
-    state.users = [];
-    const cached = readDraftCache(draftId);
+    if (isManual) state.users = [];
+    const cached = readDraftCache(draftId, { preserveUsers: !isManual });
     if (cached) {
       setSetupError('Sleeper is unavailable. This offline snapshot may be out of date.');
-      setConnection('error', 'Offline snapshot', `Last updated ${formatTimestamp(cached.savedAt)} · not connected to Sleeper`);
+      setConnection('error', 'Offline snapshot', `Last updated ${formatTimestamp(cached.savedAt)} · retrying while this page stays open`);
+      startPolling();
     } else {
       setSetupError(error.message || 'The draft could not be loaded.');
       setConnection('error', 'Sleeper connection failed', 'Check the draft ID and your connection, then try again.');
     }
   } finally {
-    if (isCurrentContext(generation)) {
-      elements.loadDraft.disabled = false;
-      renderDraftState();
+    if (requestId === state.draftRequestId) {
+      elements.loadManualDraft.disabled = false;
+      if (!isManual) elements.draftSelect.disabled = state.drafts.length === 0;
     }
+    if (isCurrentContext(generation)) renderDraftState();
   }
 }
 
 function bindEvents() {
-  elements.loadLeague.addEventListener('click', () => loadLeague());
-  elements.leagueId.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') loadLeague();
+  elements.loadAccount.addEventListener('click', loadAccount);
+  elements.accountInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') loadAccount();
   });
-  elements.loadDraft.addEventListener('click', () => loadDraft());
-  elements.forgetDraft.addEventListener('click', forgetDraft);
-  elements.draftId.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') loadDraft();
+  elements.leagueSelect.addEventListener('change', () => {
+    if (elements.leagueSelect.value) loadLeague(elements.leagueSelect.value);
   });
   elements.draftSelect.addEventListener('change', () => {
-    if (!elements.draftSelect.value) return;
-    elements.draftId.value = elements.draftSelect.value;
-    loadDraft(elements.draftSelect.value);
+    if (elements.draftSelect.value) loadDraft(elements.draftSelect.value, { source: 'league' });
   });
+  elements.loadManualDraft.addEventListener('click', () => loadDraft('', { source: 'manual' }));
+  elements.manualDraftId.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') loadDraft('', { source: 'manual' });
+  });
+  elements.forgetDraft.addEventListener('click', forgetDraft);
   elements.teamSelect.addEventListener('change', () => {
     state.teamSelectionValue = elements.teamSelect.value;
     const draftId = String(state.draft?.draft_id ?? '');
@@ -731,7 +905,7 @@ function bindEvents() {
     if (state.draft) refreshPicks({ manual: true });
     else {
       elements.setup.open = true;
-      elements.draftId.focus();
+      elements.accountInput.focus();
     }
   });
   elements.search.addEventListener('input', () => {
@@ -797,11 +971,20 @@ async function initialize() {
   }
   elements.sortBy.value = state.filters.sortBy;
   elements.showDrafted.checked = state.filters.showDrafted;
-  const savedLeagueId = storageGet(localStorage, STORAGE.leagueId);
-  const savedDraftId = storageGet(localStorage, STORAGE.draftId);
-  elements.leagueId.value = savedLeagueId;
-  elements.draftId.value = savedDraftId;
-  elements.setup.open = !savedDraftId;
+  const savedAccountInput = storageGet(localStorage, STORAGE.accountInput);
+  const savedManualDraftId = storageGet(
+    localStorage,
+    STORAGE.manualDraftId,
+    storageGet(localStorage, STORAGE.legacyDraftId),
+  );
+  elements.accountInput.value = savedAccountInput;
+  elements.manualDraftId.value = savedManualDraftId;
+  const initialConnection = chooseInitialConnection({
+    accountInput: savedAccountInput,
+    manualDraftId: savedManualDraftId,
+    preferredMode: storageGet(localStorage, STORAGE.connectionMode),
+  });
+  elements.setup.open = initialConnection.mode === 'none';
 
   try {
     await loadPlayerValues();
@@ -815,10 +998,10 @@ async function initialize() {
     return;
   }
 
-  if (savedLeagueId) {
-    await loadLeague({ autoOpenDraft: Boolean(savedDraftId) });
-  } else if (savedDraftId) {
-    await loadDraft(savedDraftId);
+  if (initialConnection.mode === 'account') {
+    await loadAccount();
+  } else if (initialConnection.mode === 'manual') {
+    await loadDraft(initialConnection.value, { source: 'manual' });
   }
 }
 

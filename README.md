@@ -27,7 +27,7 @@ The draft guide uses browser ES modules and Node's built-in test runner, with no
 npm test
 ```
 
-The tests cover player filtering and sorting, drafted-player exclusion, name fallback matching, roster-slot assignment, user/slot and draft selection, snake-draft pick calculations, ID validation, local preference/cache behavior, and the complete static player dataset.
+The tests cover account and league discovery, stale-response rejection, context-scoped persistence, standalone mock fallback, player filtering and sorting, drafted-player exclusion, name fallback matching, roster-slot assignment, user/slot and draft selection, snake-draft pick calculations, ID validation, local preference/cache behavior, and the complete static player dataset.
 
 ## Player-value data
 
@@ -49,13 +49,15 @@ For another environment, pass `--board`, `--dynasty-ecr`, and `--crosswalk` with
 
 The draft guide uses Sleeper's documented, public, read-only API at `https://api.sleeper.app/v1`. It does not need a login or token and never writes to Sleeper. It reads:
 
+- `GET /user/{username_or_user_id}`
+- `GET /user/{user_id}/leagues/nfl/2026`
 - `GET /league/{league_id}`
 - `GET /league/{league_id}/users`
 - `GET /league/{league_id}/drafts`
 - `GET /draft/{draft_id}`
 - `GET /draft/{draft_id}/picks`
 
-League ID, selected draft ID, team/slot choice, sort preference, and the show-drafted preference are stored only in the browser's local storage. There is no hard-coded league ID. A direct draft-ID field supports standalone mocks that are not returned by the league-drafts endpoint.
+The user enters a Sleeper username or numeric user ID. The guide lists that account's 2026 NFL leagues by name, then automatically opens the active or pre-draft draft for the selected league. Account, league, draft, team/slot choice, sort preference, and the show-drafted preference are stored only in the browser's local storage. The last successful account or standalone-mock mode is restored on reload. League choices are scoped per account, draft choices per league, and team choices per draft so saved state cannot leak across contexts. A separate direct draft-ID field remains available for standalone mocks that are not returned by a league.
 
 Every Sleeper request has an eight-second timeout. While a draft is open and the page is visible, picks refresh about every five seconds. Polling stops when the page is hidden and refreshes when it becomes visible or focused. The last successful pick state is cached locally so a temporary connection failure does not empty the board. The page displays whether data is live, cached, stale, or unavailable.
 

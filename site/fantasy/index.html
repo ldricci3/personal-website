@@ -48,27 +48,34 @@
           <span class="chevron" aria-hidden="true"></span>
         </summary>
         <div class="setup-grid">
-          <div class="field-group league-field">
-            <label for="league-id">League ID</label>
+          <div class="field-group account-field">
+            <label for="sleeper-account">Sleeper username or user ID</label>
             <div class="input-action">
-              <input id="league-id" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Enter Sleeper league ID">
-              <button id="load-league" class="button secondary" type="button">Load league</button>
+              <input id="sleeper-account" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Enter Sleeper username">
+              <button id="load-account" class="button secondary" type="button">Find leagues</button>
             </div>
-            <p class="field-help">Saved only on this device.</p>
+            <p class="field-help">Uses Sleeper’s public read-only API. Saved only on this device.</p>
+          </div>
+
+          <div class="field-group">
+            <label for="league-select">2026 league</label>
+            <select id="league-select" disabled>
+              <option value="">Find your account first</option>
+            </select>
           </div>
 
           <div class="field-group">
             <label for="draft-select">League draft</label>
             <select id="draft-select" disabled>
-              <option value="">Load a league first</option>
+              <option value="">Choose a league first</option>
             </select>
           </div>
 
           <div class="field-group direct-draft-field">
-            <label for="draft-id">Draft ID <span>for standalone mocks</span></label>
+            <label for="manual-draft-id">Draft ID <span>for standalone mocks</span></label>
             <div class="input-action">
-              <input id="draft-id" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Enter draft ID">
-              <button id="load-draft" class="button secondary" type="button">Open draft</button>
+              <input id="manual-draft-id" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Enter mock draft ID">
+              <button id="load-manual-draft" class="button secondary" type="button">Open mock</button>
             </div>
           </div>
 
@@ -80,7 +87,7 @@
           </div>
         </div>
         <div class="setup-actions">
-          <button id="forget-draft" class="text-button forget-button" type="button">Forget saved draft</button>
+          <button id="forget-draft" class="text-button forget-button" type="button">Forget saved setup</button>
         </div>
         <p id="setup-error" class="setup-error" role="alert" hidden></p>
       </details>

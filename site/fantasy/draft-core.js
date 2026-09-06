@@ -61,6 +61,87 @@ export function isValidSleeperId(value) {
   return /^\d{1,30}$/.test(String(value ?? '').trim());
 }
 
+export function normalizeSleeperAccountInput(value) {
+  return String(value ?? '').trim();
+}
+
+export function isValidSleeperAccountInput(value) {
+  const input = normalizeSleeperAccountInput(value);
+  if (!input || input.length > 64) return false;
+  if (isValidSleeperId(input)) return true;
+  return !/[\s/?#\u0000-\u001f\u007f]/.test(input);
+}
+
+export function normalizeSleeperAccount(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !isValidSleeperId(payload.user_id)) {
+    throw new TypeError('Sleeper did not find that account.');
+  }
+  return {
+    ...payload,
+    user_id: String(payload.user_id),
+    username: String(payload.username ?? '').trim(),
+    display_name: String(payload.display_name ?? payload.username ?? '').trim(),
+  };
+}
+
+export function normalizeSleeperLeagues(payload, season = '2026') {
+  if (!Array.isArray(payload)) throw new TypeError('Sleeper returned invalid league data.');
+  const expectedSeason = String(season);
+  return payload
+    .filter((league) => league && typeof league === 'object' && !Array.isArray(league))
+    .filter((league) => isValidSleeperId(league.league_id))
+    .filter((league) => !league.sport || String(league.sport).toLowerCase() === 'nfl')
+    .filter((league) => !league.season || String(league.season) === expectedSeason)
+    .map((league) => ({ ...league, league_id: String(league.league_id) }));
+}
+
+export function selectLeagueId(leagues, savedLeagueId = '') {
+  const saved = String(savedLeagueId ?? '');
+  if (saved && leagues.some((league) => String(league.league_id) === saved)) return saved;
+  return leagues.length === 1 ? String(leagues[0].league_id) : '';
+}
+
+export function normalizeSleeperDrafts(payload) {
+  if (!Array.isArray(payload)) throw new TypeError('Sleeper returned invalid draft data.');
+  return payload
+    .filter((draft) => draft && typeof draft === 'object' && !Array.isArray(draft))
+    .filter((draft) => isValidSleeperId(draft.draft_id))
+    .map((draft) => ({ ...draft, draft_id: String(draft.draft_id) }));
+}
+
+export function accountLeagueStorageKey(accountId) {
+  return isValidSleeperId(accountId) ? `fantasyDraft.account.${accountId}.leagueId` : '';
+}
+
+export function leagueDraftStorageKey(leagueId) {
+  return isValidSleeperId(leagueId) ? `fantasyDraft.league.${leagueId}.draftId` : '';
+}
+
+export function chooseInitialConnection({ accountInput = '', manualDraftId = '', preferredMode = '' } = {}) {
+  const account = normalizeSleeperAccountInput(accountInput);
+  const mock = String(manualDraftId ?? '').trim();
+  const hasAccount = isValidSleeperAccountInput(account);
+  const hasMock = isValidSleeperId(mock);
+  if (preferredMode === 'manual' && hasMock) return { mode: 'manual', value: mock };
+  if (preferredMode === 'account' && hasAccount) return { mode: 'account', value: account };
+  if (hasAccount) return { mode: 'account', value: account };
+  if (hasMock) return { mode: 'manual', value: mock };
+  return { mode: 'none', value: '' };
+}
+
+export function createContextGate() {
+  let generation = 0;
+  return Object.freeze({
+    begin() {
+      generation += 1;
+      return generation;
+    },
+    isCurrent(candidate) {
+      return candidate === generation;
+    },
+  });
+}
+
 export function isValidDraftPick(pick) {
   if (!pick || typeof pick !== 'object' || Array.isArray(pick)) return false;
   const pickNumber = Number(pick.pick_no);
@@ -225,11 +306,14 @@ export function assignRosterSlots(picks, selection = {}, players = []) {
 
 export function selectDraftId(drafts, savedDraftId = '') {
   const saved = String(savedDraftId ?? '');
-  if (saved && drafts.some((draft) => String(draft.draft_id) === saved)) return saved;
-  const active = drafts.find((draft) => draft.status === 'drafting')
-    ?? drafts.find((draft) => draft.status === 'pre_draft')
-    ?? drafts[0];
-  return active ? String(active.draft_id) : '';
+  const savedDraft = saved ? drafts.find((draft) => String(draft.draft_id) === saved) : null;
+  const drafting = drafts.find((draft) => draft.status === 'drafting');
+  if (drafting) return String(drafting.draft_id);
+  if (savedDraft?.status === 'pre_draft') return saved;
+  const upcoming = drafts.find((draft) => draft.status === 'pre_draft');
+  if (upcoming) return String(upcoming.draft_id);
+  if (savedDraft) return saved;
+  return drafts[0] ? String(drafts[0].draft_id) : '';
 }
 
 export function buildTeamOptions(users = [], draft = {}) {
