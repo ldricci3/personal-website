@@ -5,12 +5,19 @@ import test from 'node:test';
 const dataUrl = new URL('../site/fantasy/data/player-values.json', import.meta.url);
 const data = JSON.parse(await readFile(dataUrl, 'utf8'));
 
-const modelNumericFields = [
+const numericFields = [
   'overallRank',
   'positionRank',
   'beerPlus',
-  'fantasyProsRedraftEcr2026',
+  'fantasyProsId',
   'fantasyProsDynastyEcr2026',
+  'keeperRound3RankEdgeMin',
+  'keeperRound3RankEdgeMax',
+  'keeperRound4RankEdgeMin',
+  'keeperRound4RankEdgeMax',
+];
+
+const removedSyntheticFields = [
   'predicted2027RankMedian',
   'predicted2028RankMedian',
   'keeperProbabilityRound3',
@@ -30,14 +37,13 @@ const modelNumericFields = [
   'secondYearProbabilityGivenRound4',
 ];
 
-const probabilityFields = [
-  'keeperProbabilityRound3',
-  'keeperProbabilityRound4',
-  'secondYearProbabilityGivenRound3',
-  'secondYearProbabilityGivenRound4',
-];
+function expectedComparison(rank, [firstPick, lastPick]) {
+  if (rank < firstPick) return 'aheadOfRound';
+  if (rank <= lastPick) return 'withinRound';
+  return 'behindRound';
+}
 
-test('contains the complete 219-player model output with unique keys', () => {
+test('contains the complete 219-player board with unique source identities', () => {
   assert.equal(data.metadata.rowCount, 219);
   assert.equal(data.players.length, 219);
   assert.equal(new Set(data.players.map(({ modelKey }) => modelKey)).size, 219);
@@ -50,31 +56,54 @@ test('contains the complete 219-player model output with unique keys', () => {
   );
 });
 
-test('all calibrated numeric model columns are populated and finite', () => {
+test('all current and direct dynasty fields are populated and finite', () => {
   for (const player of data.players) {
-    for (const field of modelNumericFields) {
-      assert.equal(
-        typeof player[field],
-        'number',
-        `${player.name} has a non-numeric ${field}`,
-      );
+    for (const field of numericFields) {
+      assert.equal(typeof player[field], 'number', `${player.name} has a non-numeric ${field}`);
       assert.ok(Number.isFinite(player[field]), `${player.name} has a non-finite ${field}`);
     }
   }
 });
 
-test('all probability outputs are bounded', () => {
+test('keeper comparisons are deterministic functions of visible ranks', () => {
+  const round3 = data.metadata.keeperComparison.round3PickRange;
+  const round4 = data.metadata.keeperComparison.round4PickRange;
+  assert.deepEqual(round3, [25, 36]);
+  assert.deepEqual(round4, [37, 48]);
+
   for (const player of data.players) {
-    for (const field of probabilityFields) {
-      assert.ok(
-        player[field] >= 0 && player[field] <= 1,
-        `${player.name} has out-of-range ${field}: ${player[field]}`,
-      );
+    const rank = player.fantasyProsDynastyEcr2026;
+    assert.equal(player.keeperRound3RankEdgeMin, Number((round3[0] - rank).toFixed(2)));
+    assert.equal(player.keeperRound3RankEdgeMax, Number((round3[1] - rank).toFixed(2)));
+    assert.equal(player.keeperRound4RankEdgeMin, Number((round4[0] - rank).toFixed(2)));
+    assert.equal(player.keeperRound4RankEdgeMax, Number((round4[1] - rank).toFixed(2)));
+    assert.equal(player.keeperRound3Comparison, expectedComparison(rank, round3));
+    assert.equal(player.keeperRound4Comparison, expectedComparison(rank, round4));
+  }
+});
+
+test('direct dynasty source and scoring-format limitation are explicit', () => {
+  const source = data.metadata.sources.dynastyRanking;
+  assert.equal(source.provider, 'FantasyPros');
+  assert.equal(source.dataset, 'DynastyProcess db_fpecr_latest.csv');
+  assert.equal(source.pageType, 'dynasty-overall');
+  assert.equal(source.sourcePage, '/nfl/rankings/dynasty-overall.php');
+  assert.equal(source.snapshotDate, '2026-09-04');
+  assert.equal(source.matchedPlayers, 219);
+  assert.match(source.scoringFormat, /not identified/i);
+  assert.match(data.metadata.keeperComparison.method, /No forecast, simulation, probability, or multi-year weighting/i);
+});
+
+test('synthetic future-rank and Monte Carlo outputs are removed for every player', () => {
+  assert.equal(Object.hasOwn(data.metadata, 'model'), false);
+  for (const player of data.players) {
+    for (const field of removedSyntheticFields) {
+      assert.equal(Object.hasOwn(player, field), false, `${player.name} still has ${field}`);
     }
   }
 });
 
-test('the original top 24 all have full forecast and surplus outputs', () => {
+test('top-24 players retain direct dynasty keeper comparisons', () => {
   const top24 = data.players.filter(({ overallRank }) => overallRank <= 24);
   assert.equal(top24.length, 24);
   assert.deepEqual(
@@ -82,11 +111,9 @@ test('the original top 24 all have full forecast and surplus outputs', () => {
     Array.from({ length: 24 }, (_, index) => index + 1),
   );
   for (const player of top24) {
-    for (const field of modelNumericFields) {
-      assert.ok(Number.isFinite(player[field]), `${player.name} is missing ${field}`);
-    }
-    assert.notEqual(player.modelCoverage, 'ineligible_rounds_1_2');
-    assert.notEqual(player.modelConfidence, 'not_applicable');
+    assert.ok(Number.isFinite(player.fantasyProsDynastyEcr2026));
+    assert.ok(Number.isFinite(player.keeperRound3RankEdgeMin));
+    assert.ok(Number.isFinite(player.keeperRound4RankEdgeMin));
   }
 });
 

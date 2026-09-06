@@ -103,9 +103,7 @@
             <select id="sort-by">
               <option value="rank">Overall rank</option>
               <option value="beer">Current BEER+</option>
-              <option value="keeperTotal">Keeper total</option>
-              <option value="keeperR3">Round 3 option</option>
-              <option value="keeperR4">Round 4 option</option>
+              <option value="dynasty">Dynasty rank</option>
             </select>
           </label>
         </div>
@@ -127,11 +125,11 @@
 
         <div class="value-legend" aria-label="Player value legend">
           <span><i class="legend-current"></i>Current BEER+</span>
-          <span><i class="legend-future"></i>Keeper option</span>
+          <span><i class="legend-future"></i>Dynasty rank</span>
           <button id="value-help" class="text-button" type="button" aria-expanded="false" aria-controls="value-help-copy">How values work</button>
         </div>
         <p id="value-help-copy" class="value-help-copy" hidden>
-          Current BEER+ measures 2026 draft value. Keeper option is a separate, probability-weighted estimate of future surplus over a Round 3 or Round 4 pick. It is a tiebreaker, not a score to add blindly.
+          Current BEER+ measures 2026 draft value. FantasyPros consensus dynasty rank is the separate future-value proxy, and a lower rank is better. Expand a player to compare that rank directly with the possible Round 3 and Round 4 keeper costs; no future-season forecast or simulation is used.
         </p>
 
         <div id="player-list" class="player-list" aria-busy="true"></div>
@@ -153,7 +151,7 @@
         <h3>Additional picks</h3>
         <div id="roster-extras-list"></div>
       </div>
-      <p class="roster-note">Players are assigned chronologically to the first eligible open spot. K and DEF picks appear even without value-model data.</p>
+      <p class="roster-note">Players are assigned chronologically to the first eligible open spot. K and DEF picks appear even without BEER+ or dynasty-rank data.</p>
     </aside>
   </main>
 

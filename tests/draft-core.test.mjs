@@ -72,15 +72,22 @@ test('filters by position and search, then sorts by selected value', () => {
   const bySearch = filterAndSortPlayers(players, { search: 'det' });
   assert.deepEqual(bySearch.map((player) => player.name), ['Beta Runner Jr.']);
 
-  const byKeeper = filterAndSortPlayers(players, { sortBy: 'keeperTotal' });
-  assert.deepEqual(byKeeper.map((player) => player.name), [
+  const byDynasty = filterAndSortPlayers(players, { sortBy: 'dynasty' });
+  assert.deepEqual(byDynasty.map((player) => player.name), [
     'Gamma Quarterback', 'Alpha Receiver', 'Beta Runner Jr.', 'Delta Tight End',
   ]);
 
-  const byRoundThree = filterAndSortPlayers(players, { sortBy: 'keeperR3' });
-  const byRoundFour = filterAndSortPlayers(players, { sortBy: 'keeperR4' });
-  assert.deepEqual(byRoundThree.map((player) => player.name), byKeeper.map((player) => player.name));
-  assert.deepEqual(byRoundFour.map((player) => player.name), byKeeper.map((player) => player.name));
+  const withMissingRank = [
+    ...players,
+    { playerKey: 'missing-def', name: 'Missing Defense', position: 'DEF', overallRank: 5, fantasyProsDynastyEcr2026: null },
+  ];
+  const byDynastyWithMissing = filterAndSortPlayers(withMissingRank, { sortBy: 'dynasty' });
+  assert.equal(byDynastyWithMissing.at(-1).name, 'Missing Defense');
+
+  const staleSavedSort = filterAndSortPlayers(players, { sortBy: 'keeperTotal' });
+  assert.deepEqual(staleSavedSort.map((player) => player.name), [
+    'Beta Runner Jr.', 'Gamma Quarterback', 'Alpha Receiver', 'Delta Tight End',
+  ]);
 });
 
 test('excludes picked players by default and crosses them in show mode', () => {
@@ -154,7 +161,7 @@ test('uses the same strict ID and metadata fallback rules for roster values', ()
   assert.equal(conflictingRoster.slots.find((slot) => slot.id === 'RB1').player.beerPlus, null);
 });
 
-test('keeps unmatched K and DEF picks in the roster without model values', () => {
+test('keeps unmatched K and DEF picks in the roster without player values', () => {
   const defensePick = {
     pick_no: 6,
     draft_slot: 1,
@@ -165,7 +172,7 @@ test('keeps unmatched K and DEF picks in the roster without model values', () =>
   const roster = assignRosterSlots([...picks, defensePick], { userId: 'user-1' }, players);
   const defense = roster.slots.find((slot) => slot.id === 'DEF1').player;
   assert.equal(defense.name, 'New England Patriots');
-  assert.equal(defense.modelCoverage, 'not_in_value_model');
+  assert.equal(defense.valueCoverage, 'not_in_player_values');
 });
 
 test('builds user and slot choices and resolves persisted selection', () => {

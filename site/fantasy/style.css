@@ -731,8 +731,29 @@ body[data-mobile-view="players"] .roster-panel {
   background: linear-gradient(90deg, var(--accent), var(--accent-bright));
 }
 
-.value-cell.future .value-fill {
-  background: linear-gradient(90deg, var(--future), var(--future-bright));
+.rank-cell {
+  padding: 0.38rem 0.48rem;
+  border: 1px solid rgba(167, 139, 250, 0.28);
+  border-radius: 7px;
+  background: var(--future-dim);
+}
+
+.rank-cell .value-label {
+  margin-bottom: 0.08rem;
+}
+
+.rank-cell .value-label strong {
+  color: var(--future-bright);
+}
+
+.rank-source {
+  display: block;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 0.65rem;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .expand-indicator {

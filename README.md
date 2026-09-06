@@ -31,17 +31,19 @@ The tests cover player filtering and sorting, drafted-player exclusion, name fal
 
 ## Player-value data
 
-`site/fantasy/data/player-values.json` contains 219 QB/RB/WR/TE players from the 2026 Subvertadown half-PPR board, plus current FantasyPros redraft/dynasty ECR and historically calibrated 2027/2028 keeper-option outputs. All 219 rows, including the original top 24, have complete forecasts. Current BEER+ and future keeper value stay separate in the interface.
+`site/fantasy/data/player-values.json` contains 219 QB/RB/WR/TE players from the 2026 Subvertadown half-PPR board. Current BEER+ remains the primary draft value. Future value is the direct FantasyPros consensus dynasty-overall ECR from the DynastyProcess snapshot dated September 4, 2026; there is no homegrown 2027/2028 forecast or simulation.
 
-Sleeper IDs are joined through the DynastyProcess player crosswalk. Current coverage is 219 of 219 players, all by exact 2026 FantasyPros ID. The generator, assumptions, aliases, and validation details are documented in [`site/fantasy/data/README.md`](site/fantasy/data/README.md).
+Each player has separate deterministic Round 3 and Round 4 comparisons. The calculation is simply `possible keeper-cost pick minus dynasty ECR`: positive means the player's dynasty rank is earlier than the forfeited pick. The page shows the full possible edge range because the cost depends on draft slot. All 219 rows, including the original top 24, are scored because keeper eligibility depends on where the player is actually drafted.
 
-Regenerate the file inside the current Muse workspace, where the keeper-model inputs live, with:
+Sleeper IDs are joined through the DynastyProcess player crosswalk. Current coverage is 219 of 219 players, all by exact 2026 FantasyPros ID. The dynasty source has one unique player-name + position match for every board row. The source file does not identify its scoring format, so the page does not claim that dynasty ECR is half-PPR. Details are documented in [`site/fantasy/data/README.md`](site/fantasy/data/README.md).
+
+Regenerate the file inside the current Muse workspace, where the source board and DynastyProcess inputs live, with:
 
 ```bash
 python3 scripts/generate-fantasy-player-data.py
 ```
 
-For another environment, pass `--model`, `--existing-scores`, and `--crosswalk` with paths to the three inputs documented in [`site/fantasy/data/README.md`](site/fantasy/data/README.md). Those source files are intentionally not duplicated in this repository. The generator never mutates the source keeper model; it runs a temporary full-board adaptation and writes only the static website JSON.
+For another environment, pass `--board`, `--dynasty-ecr`, and `--crosswalk` with paths to the three inputs documented in [`site/fantasy/data/README.md`](site/fantasy/data/README.md). Those source files are intentionally not duplicated in this repository. The generator reads them, verifies complete one-to-one matching, and writes only the static website JSON.
 
 ## Sleeper behavior
 
@@ -57,12 +59,13 @@ League ID, selected draft ID, team/slot choice, sort preference, and the show-dr
 
 Every Sleeper request has an eight-second timeout. While a draft is open and the page is visible, picks refresh about every five seconds. Polling stops when the page is hidden and refreshes when it becomes visible or focused. The last successful pick state is cached locally so a temporary connection failure does not empty the board. The page displays whether data is live, cached, stale, or unavailable.
 
-The roster view uses the league's fixed lineup shape: 1 QB, 2 RB, 2 WR, 1 TE, 2 FLEX, 1 K, 1 DEF, and 5 bench spots. Picks are assigned chronologically to the first eligible open slot. K, DEF, and any other Sleeper pick without a value-model row still appears using the pick metadata.
+The roster view uses the league's fixed lineup shape: 1 QB, 2 RB, 2 WR, 1 TE, 2 FLEX, 1 K, 1 DEF, and 5 bench spots. Picks are assigned chronologically to the first eligible open slot. K, DEF, and any other Sleeper pick without a player-value row still appears using the pick metadata.
 
 ## Limitations
 
-- Player values are a static 2026 snapshot and require regeneration when the source board or keeper model changes.
-- Keeper forecasts are probabilistic estimates from a limited historical window, not guarantees. The interface keeps them separate from current BEER+ value.
+- Player values are a static 2026 snapshot and require regeneration when the source board or dynasty-ranking snapshot changes.
+- Dynasty rankings value youth and long careers more than this league's two-season keeper window, so they may underrate older players who still project well in the near term. Current BEER+ remains visible as the counterweight.
+- The DynastyProcess source does not identify the scoring format for `dynasty-overall`, so the page presents it as general consensus dynasty ECR rather than half-PPR dynasty ECR.
 - The guide depends on Sleeper's public API being reachable and retaining the documented response shapes. Cached picks cover temporary failures, not missing draft metadata on a first load.
 - The guide is read-only. It cannot make a pick, change a roster, or modify a Sleeper draft.
 
