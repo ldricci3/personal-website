@@ -416,6 +416,47 @@ export function pickNumberForRound(round, slot, teams, draftType = 'snake') {
   return roundOffset + (isSnakeReverse ? teamCount - slotNumber + 1 : slotNumber);
 }
 
+export function buildValueCurve(players = [], { position = 'ALL', pickedKeys = new Set() } = {}) {
+  const normalizedPosition = normalizePosition(position);
+  const selectedPosition = normalizedPosition === 'ALL' ? 'ALL' : normalizedPosition;
+  const picked = pickedKeys instanceof Set ? pickedKeys : new Set(pickedKeys ?? []);
+  return players
+    .filter((player) => selectedPosition === 'ALL' || normalizePosition(player?.position) === selectedPosition)
+    .map((player) => ({
+      ...player,
+      rank: numericSortValue(player?.overallRank),
+      value: numericSortValue(player?.beerPlus),
+      drafted: picked.has(playerKey(player)),
+    }))
+    .filter((player) => player.rank !== null && player.rank > 0 && player.value !== null)
+    .sort((left, right) => left.rank - right.rank || String(left.name ?? '').localeCompare(String(right.name ?? '')));
+}
+
+export function nearestAvailableCurvePoint(points = [], targetX, targetY, maxDistance = Infinity) {
+  const x = numericSortValue(targetX);
+  const y = numericSortValue(targetY);
+  if (x === null || y === null) return null;
+  const nearest = points.reduce((best, player) => {
+    if (player?.drafted) return best;
+    const pointX = numericSortValue(player?.screenX);
+    const pointY = numericSortValue(player?.screenY);
+    if (pointX === null || pointY === null) return best;
+    const distance = Math.hypot(pointX - x, pointY - y);
+    return !best || distance < best.distance ? { player, distance } : best;
+  }, null);
+  return nearest && nearest.distance <= maxDistance ? nearest.player : null;
+}
+
+export function snakeDraftPickNumbers(draft = {}, selection = {}) {
+  const slot = numeric(selection?.draftSlot);
+  const teams = numeric(draft?.settings?.teams);
+  const rounds = numeric(draft?.settings?.rounds);
+  const type = String(draft?.type ?? '').toLowerCase();
+  if (type !== 'snake' || numeric(draft?.settings?.reversal_round) > 0) return [];
+  if (!slot || !teams || !rounds || slot > teams) return [];
+  return Array.from({ length: rounds }, (_, index) => pickNumberForRound(index + 1, slot, teams, type));
+}
+
 export function nextPickStatus(picks, draft = {}, selection = {}) {
   const slot = numeric(selection.draftSlot);
   const teams = numeric(draft?.settings?.teams);

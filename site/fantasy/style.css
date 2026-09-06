@@ -26,6 +26,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html {
   min-width: 320px;
   background: var(--bg);
@@ -383,6 +387,33 @@ select {
   padding: 0 1rem 0.9rem;
 }
 
+.workspace-view-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem;
+  margin-bottom: 0.8rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.workspace-view-tabs button {
+  min-height: 2.75rem;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.workspace-view-tabs button.active {
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
 .mobile-view-switch {
   position: fixed;
   right: max(0.75rem, env(safe-area-inset-right));
@@ -426,7 +457,9 @@ select {
   font-size: 0.75rem;
 }
 
-body[data-mobile-view="roster"] .players-panel {
+body[data-mobile-view="roster"] .players-panel,
+body[data-mobile-view="roster"] .curve-panel,
+body[data-mobile-view="roster"] .workspace-view-tabs {
   display: none;
 }
 
@@ -434,7 +467,7 @@ body[data-mobile-view="players"] .roster-panel {
   display: none;
 }
 
-.players-panel, .roster-panel {
+.players-panel, .curve-panel, .roster-panel {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: rgba(24, 24, 27, 0.8);
@@ -731,6 +764,216 @@ body[data-mobile-view="players"] .roster-panel {
   margin-left: auto;
 }
 
+.curve-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.curve-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 0.9rem 0.7rem;
+}
+
+.curve-heading h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.curve-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem 0.65rem;
+  color: var(--text-faint);
+  font-size: 0.65rem;
+}
+
+.curve-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+.curve-legend i {
+  width: 0.52rem;
+  height: 0.52rem;
+  border-radius: 50%;
+  background: var(--accent-bright);
+}
+
+.curve-legend .drafted-key { background: #71717a; }
+.curve-legend .pick-key { background: var(--success); }
+
+.curve-position-tabs {
+  display: flex;
+  gap: 0.2rem;
+  padding: 0 0.75rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.curve-position-tabs::-webkit-scrollbar { display: none; }
+
+.curve-position-tabs button {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.65rem;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.curve-position-tabs button.active {
+  color: var(--text);
+  background: var(--accent-dim);
+}
+
+.value-curve-figure {
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+.value-curve-chart {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  min-height: 350px;
+  overflow: visible;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.curve-grid line {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.curve-grid text {
+  fill: var(--text-faint);
+  font-family: var(--font);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.curve-grid .curve-axis-label {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.curve-line {
+  fill: none;
+  stroke: var(--accent-bright);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.62;
+  pointer-events: none;
+}
+
+.curve-point {
+  stroke: var(--surface);
+  stroke-width: 1.5;
+  transition: r 0.12s ease, opacity 0.12s ease;
+}
+
+.curve-point.available {
+  fill: var(--accent-bright);
+  cursor: pointer;
+}
+
+.curve-point.drafted {
+  fill: #71717a;
+  opacity: 0.48;
+}
+
+.curve-point.selected {
+  fill: var(--warning);
+  stroke: var(--text);
+  stroke-width: 2;
+}
+
+.curve-point:focus-visible {
+  outline: none;
+  stroke: var(--text);
+  stroke-width: 3;
+}
+
+.curve-callout {
+  pointer-events: none;
+}
+
+.curve-callout rect {
+  fill: var(--surface-raised);
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.curve-callout text {
+  fill: var(--text);
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.curve-pick-marker {
+  stroke: var(--success);
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+  opacity: 0.45;
+}
+
+.curve-pick-marker-dot {
+  fill: var(--success);
+}
+
+.value-curve-figure figcaption,
+.curve-pick-note {
+  margin: 0;
+  padding: 0 0.9rem;
+  color: var(--text-faint);
+  font-size: 0.69rem;
+  line-height: 1.45;
+}
+
+.curve-pick-note {
+  padding-top: 0.35rem;
+  color: var(--text-muted);
+}
+
+.curve-player-details {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  min-height: 3rem;
+  margin: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.curve-player-details strong {
+  font-size: 0.8rem;
+}
+
+.curve-player-details span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
 .roster-panel {
   padding: 0.9rem;
 }
@@ -861,6 +1104,12 @@ body[data-mobile-view="players"] .roster-panel {
 
   .player-table .numeric-column { width: 6.5rem; }
   .player-table th button, .player-row td { padding-inline: 1rem; }
+
+  .curve-player-details {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 0.45rem;
+  }
 }
 
 @media (min-width: 960px) {
@@ -894,8 +1143,13 @@ body[data-mobile-view="players"] .roster-panel {
   }
 
   body[data-mobile-view] .players-panel,
+  body[data-mobile-view] .curve-panel,
   body[data-mobile-view] .roster-panel {
     display: block;
+  }
+
+  body[data-mobile-view="roster"] .workspace-view-tabs {
+    display: grid;
   }
 
   .roster-panel {

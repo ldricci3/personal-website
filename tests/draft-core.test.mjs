@@ -4,6 +4,7 @@ import {
   accountLeagueStorageKey,
   assignRosterSlots,
   buildTeamOptions,
+  buildValueCurve,
   chooseInitialConnection,
   createContextGate,
   defaultSortDirection,
@@ -17,6 +18,7 @@ import {
   isValidSleeperId,
   leagueDraftStorageKey,
   loadCachedPicks,
+  nearestAvailableCurvePoint,
   nextPickStatus,
   nextSortState,
   normalizeDraftPicks,
@@ -34,6 +36,7 @@ import {
   saveCachedPicks,
   selectDraftId,
   selectLeagueId,
+  snakeDraftPickNumbers,
   storageGet,
   storageRemove,
   storageSet,
@@ -384,6 +387,38 @@ test('calculates snake pick positions and next-pick status', () => {
     unsupported: true,
     reason: 'custom reversal draft',
   });
+});
+
+test('builds value curves in overall-rank order with drafted state and position filtering', () => {
+  const all = buildValueCurve(players, { pickedKeys: new Set(['gamma-qb']) });
+  assert.deepEqual(all.map((player) => player.rank), [1, 2, 3, 4]);
+  assert.deepEqual(all.map((player) => player.value), [9.2, 5.1, 8.5, 4.2]);
+  assert.equal(all.find((player) => player.playerKey === 'gamma-qb').drafted, true);
+  assert.equal(all.find((player) => player.playerKey === 'alpha-wr').drafted, false);
+
+  const receivers = buildValueCurve(players, { position: 'wr', pickedKeys: ['alpha-wr'] });
+  assert.deepEqual(receivers.map((player) => player.playerKey), ['alpha-wr']);
+  assert.equal(receivers[0].drafted, true);
+});
+
+test('selects the nearest available curve point within the tap radius', () => {
+  const plotted = [
+    { playerKey: 'drafted', drafted: true, screenX: 10, screenY: 10 },
+    { playerKey: 'near', drafted: false, screenX: 14, screenY: 12 },
+    { playerKey: 'far', drafted: false, screenX: 80, screenY: 80 },
+  ];
+  assert.equal(nearestAvailableCurvePoint(plotted, 10, 10, 26)?.playerKey, 'near');
+  assert.equal(nearestAvailableCurvePoint(plotted, 45, 45, 10), null);
+});
+
+test('generates every standard snake-draft pick marker and rejects unsupported contexts', () => {
+  assert.deepEqual(snakeDraftPickNumbers(draft, { draftSlot: 2 }), [2, 7, 10, 15]);
+  assert.deepEqual(snakeDraftPickNumbers(draft, {}), []);
+  assert.deepEqual(snakeDraftPickNumbers({ ...draft, type: 'linear' }, { draftSlot: 2 }), []);
+  assert.deepEqual(snakeDraftPickNumbers({
+    ...draft,
+    settings: { ...draft.settings, reversal_round: 3 },
+  }, { draftSlot: 2 }), []);
 });
 
 test('storage helpers persist preferences and cache valid picks safely', () => {
