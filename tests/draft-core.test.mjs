@@ -6,6 +6,7 @@ import {
   buildTeamOptions,
   chooseInitialConnection,
   createContextGate,
+  defaultSortDirection,
   draftPicksSignature,
   filterAndSortPlayers,
   freshSleeperPath,
@@ -17,6 +18,7 @@ import {
   leagueDraftStorageKey,
   loadCachedPicks,
   nextPickStatus,
+  nextSortState,
   normalizeDraftPicks,
   normalizeName,
   normalizePosition,
@@ -201,29 +203,54 @@ test('validates and normalizes Sleeper pick payloads deterministically', () => {
   assert.equal(draftPicksSignature(picks), draftPicksSignature([...picks].reverse()));
 });
 
-test('filters by position and search, then sorts by selected value', () => {
+test('filters by position and search, then sorts every visible table column in both directions', () => {
   const byPosition = filterAndSortPlayers(players, { position: 'WR' });
   assert.deepEqual(byPosition.map((player) => player.name), ['Alpha Receiver']);
 
   const bySearch = filterAndSortPlayers(players, { search: 'det' });
   assert.deepEqual(bySearch.map((player) => player.name), ['Beta Runner Jr.']);
 
-  const byDynasty = filterAndSortPlayers(players, { sortBy: 'dynasty' });
-  assert.deepEqual(byDynasty.map((player) => player.name), [
-    'Gamma Quarterback', 'Alpha Receiver', 'Beta Runner Jr.', 'Delta Tight End',
-  ]);
+  const expected = {
+    playerAsc: ['Alpha Receiver', 'Beta Runner Jr.', 'Delta Tight End', 'Gamma Quarterback'],
+    playerDesc: ['Gamma Quarterback', 'Delta Tight End', 'Beta Runner Jr.', 'Alpha Receiver'],
+    valueAsc: ['Delta Tight End', 'Gamma Quarterback', 'Alpha Receiver', 'Beta Runner Jr.'],
+    valueDesc: ['Beta Runner Jr.', 'Alpha Receiver', 'Gamma Quarterback', 'Delta Tight End'],
+    dynastyAsc: ['Gamma Quarterback', 'Alpha Receiver', 'Beta Runner Jr.', 'Delta Tight End'],
+    dynastyDesc: ['Delta Tight End', 'Beta Runner Jr.', 'Alpha Receiver', 'Gamma Quarterback'],
+  };
+  assert.deepEqual(filterAndSortPlayers(players, { sortBy: 'player', sortDirection: 'asc' }).map(({ name }) => name), expected.playerAsc);
+  assert.deepEqual(filterAndSortPlayers(players, { sortBy: 'player', sortDirection: 'desc' }).map(({ name }) => name), expected.playerDesc);
+  assert.deepEqual(filterAndSortPlayers(players, { sortBy: 'beer', sortDirection: 'asc' }).map(({ name }) => name), expected.valueAsc);
+  assert.deepEqual(filterAndSortPlayers(players, { sortBy: 'beer', sortDirection: 'desc' }).map(({ name }) => name), expected.valueDesc);
+  assert.deepEqual(filterAndSortPlayers(players, { sortBy: 'dynasty', sortDirection: 'asc' }).map(({ name }) => name), expected.dynastyAsc);
+  assert.deepEqual(filterAndSortPlayers(players, { sortBy: 'dynasty', sortDirection: 'desc' }).map(({ name }) => name), expected.dynastyDesc);
 
-  const withMissingRank = [
+  const withMissingNumbers = [
     ...players,
-    { playerKey: 'missing-def', name: 'Missing Defense', position: 'DEF', overallRank: 5, fantasyProsDynastyEcr2026: null },
+    { playerKey: 'missing-def', name: 'Missing Defense', position: 'DEF', overallRank: 5, beerPlus: null, fantasyProsDynastyEcr2026: null },
   ];
-  const byDynastyWithMissing = filterAndSortPlayers(withMissingRank, { sortBy: 'dynasty' });
-  assert.equal(byDynastyWithMissing.at(-1).name, 'Missing Defense');
+  for (const sortBy of ['beer', 'dynasty']) {
+    assert.equal(filterAndSortPlayers(withMissingNumbers, { sortBy, sortDirection: 'asc' }).at(-1).name, 'Missing Defense');
+    assert.equal(filterAndSortPlayers(withMissingNumbers, { sortBy, sortDirection: 'desc' }).at(-1).name, 'Missing Defense');
+  }
 
   const staleSavedSort = filterAndSortPlayers(players, { sortBy: 'keeperTotal' });
-  assert.deepEqual(staleSavedSort.map((player) => player.name), [
-    'Beta Runner Jr.', 'Gamma Quarterback', 'Alpha Receiver', 'Delta Tight End',
-  ]);
+  assert.deepEqual(staleSavedSort.map((player) => player.name), expected.valueDesc);
+});
+
+test('uses sensible initial directions and toggles the active table header', () => {
+  assert.equal(defaultSortDirection('player'), 'asc');
+  assert.equal(defaultSortDirection('beer'), 'desc');
+  assert.equal(defaultSortDirection('dynasty'), 'asc');
+  assert.deepEqual(nextSortState({ sortBy: 'beer', sortDirection: 'desc' }, 'beer'), {
+    sortBy: 'beer', sortDirection: 'asc',
+  });
+  assert.deepEqual(nextSortState({ sortBy: 'beer', sortDirection: 'asc' }, 'dynasty'), {
+    sortBy: 'dynasty', sortDirection: 'asc',
+  });
+  assert.deepEqual(nextSortState({ sortBy: 'dynasty', sortDirection: 'asc' }, 'dynasty'), {
+    sortBy: 'dynasty', sortDirection: 'desc',
+  });
 });
 
 test('excludes picked players by default and crosses them in show mode', () => {

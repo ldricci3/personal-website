@@ -27,13 +27,13 @@ The draft guide uses browser ES modules and Node's built-in test runner, with no
 npm test
 ```
 
-The tests cover account and league discovery; the standalone-mock draft-ID path using a real Sleeper response shape; cache-busting for live draft reads; stale-response rejection; context-scoped persistence; player filtering and sorting; drafted-player exclusion; name fallback matching; roster-slot assignment; user/slot and draft selection; snake-draft pick calculations; ID validation; local preference/cache behavior; and the complete static player dataset.
+The tests cover account and league discovery; the standalone-mock draft-ID path using a real Sleeper response shape; cache-busting for live draft reads; stale-response rejection; context-scoped persistence; compact-table rendering and bidirectional column sorting; player filtering; drafted-player exclusion; name fallback matching; roster-slot assignment; user/slot and draft selection; snake-draft pick calculations; ID validation; local preference/cache behavior; and the complete static player dataset.
 
 ## Player-value data
 
 `site/fantasy/data/player-values.json` contains 219 QB/RB/WR/TE players from the 2026 Subvertadown half-PPR board. Current BEER+ remains the primary draft value. Future value is the direct FantasyPros consensus dynasty-overall ECR from the DynastyProcess snapshot dated September 4, 2026; there is no homegrown 2027/2028 forecast or simulation.
 
-Each player has separate deterministic Round 3 and Round 4 comparisons. The calculation is simply `possible keeper-cost pick minus dynasty ECR`: positive means the player's dynasty rank is earlier than the forfeited pick. The page shows the full possible edge range because the cost depends on draft slot. All 219 rows, including the original top 24, are scored because keeper eligibility depends on where the player is actually drafted.
+Each player has separate deterministic Round 3 and Round 4 comparisons in the source data. The calculation is simply `possible keeper-cost pick minus dynasty ECR`: positive means the player's dynasty rank is earlier than the forfeited pick. The draft-room UI intentionally stays compact and shows only player identity, current value, and dynasty rank; all 219 rows, including the original top 24, retain the underlying comparison data.
 
 Sleeper IDs are joined through the DynastyProcess player crosswalk. Current coverage is 219 of 219 players, all by exact 2026 FantasyPros ID. The dynasty source has one unique player-name + position match for every board row. The source file does not identify its scoring format, so the page does not claim that dynasty ECR is half-PPR. Details are documented in [`site/fantasy/data/README.md`](site/fantasy/data/README.md).
 
@@ -59,7 +59,7 @@ The draft guide uses Sleeper's documented, public, read-only API at `https://api
 
 The user enters a Sleeper username or numeric user ID, and the guide lists that account's 2026 NFL leagues by name. Standalone mocks are different: Sleeper's public account-drafts endpoint omitted a live standalone mock in production testing, even though direct draft lookup returned it normally. The guide therefore does not claim username-based mock discovery. To follow a standalone mock, the user enters the numeric draft ID from its Sleeper URL. The guide uses only the draft's top-level `league_id` as an official league association and does not infer one from copied mock metadata.
 
-Account, league, league-draft, direct mock, team/slot, sort, and show-drafted choices are stored only in the browser's local storage. League choices are scoped per account, league drafts per league, and team choices per draft so saved state cannot leak across contexts.
+Account, league, league-draft, direct mock, team/slot, sort column/direction, and show-drafted choices are stored only in the browser's local storage. League choices are scoped per account, league drafts per league, and team choices per draft so saved state cannot leak across contexts.
 
 Every Sleeper request has an eight-second timeout. While a draft is open and the page is visible, picks refresh about every five seconds. Sleeper serves the picks endpoint through a public CDN cache (`s-maxage=15`, with stale responses permitted while it revalidates), so every initial and polled live-draft read gets a unique query parameter rather than reusing a cached URL. Polling stops when the page is hidden and refreshes immediately when it becomes visible or focused. The last successful pick state is cached locally so a temporary connection failure does not empty the board. The page displays whether data is live, cached, stale, or unavailable.
 
@@ -97,6 +97,8 @@ site/
 scripts/
   generate-fantasy-player-data.py
 tests/
+  discovery-ui.test.mjs
   draft-core.test.mjs
   player-data.test.mjs
+  player-table-ui.test.mjs
 ```
