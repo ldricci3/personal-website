@@ -54,7 +54,6 @@ const state = {
   refreshRequestId: 0,
   lastRefreshAt: 0,
   maxBeer: 1,
-  maxKeeper: 1,
 };
 
 const elements = {
@@ -110,10 +109,28 @@ function formatValue(value, digits = 2) {
   return number.toFixed(digits).replace(/\.00$/, '');
 }
 
-function formatProbability(value) {
+function formatRank(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
-  return `${Math.round(number * 100)}%`;
+  const display = Number.isInteger(number) ? String(number) : number.toFixed(1);
+  return `#${display}`;
+}
+
+function formatSignedRankEdge(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  const rounded = Math.round(number * 10) / 10;
+  return `${rounded > 0 ? '+' : ''}${rounded}`;
+}
+
+function formatRankEdgeRange(minimum, maximum) {
+  return `${formatSignedRankEdge(minimum)} to ${formatSignedRankEdge(maximum)} slots`;
+}
+
+function comparisonLabel(comparison) {
+  if (comparison === 'aheadOfRound') return 'Ahead of the full round';
+  if (comparison === 'withinRound') return 'Depends on draft slot';
+  return 'Behind the full round';
 }
 
 function formatTimestamp(timestamp) {
@@ -181,7 +198,6 @@ async function loadPlayerValues() {
   state.players = payload.players;
   state.metadata = payload.metadata ?? {};
   state.maxBeer = Math.max(1, ...state.players.map((player) => asNumber(player.beerPlus)));
-  state.maxKeeper = Math.max(0.1, ...state.players.map((player) => asNumber(player.keeperOptionTotal)));
   renderPlayers();
   renderRoster();
 }
@@ -196,6 +212,14 @@ function appendValueCell(parent, label, value, maxValue, future = false) {
   fill.style.width = `${percent.toFixed(1)}%`;
   track.append(fill);
   cell.append(valueLabel, track);
+  parent.append(cell);
+}
+
+function appendRankCell(parent, label, rank) {
+  const cell = createElement('div', 'value-cell future rank-cell');
+  const valueLabel = createElement('div', 'value-label');
+  valueLabel.append(createElement('span', '', label), createElement('strong', '', formatRank(rank)));
+  cell.append(valueLabel, createElement('span', 'rank-source', 'Lower is better'));
   parent.append(cell);
 }
 
@@ -221,41 +245,35 @@ function buildPlayerCard(player) {
   summary.append(identity);
 
   appendValueCell(summary, 'Now', player.beerPlus, state.maxBeer);
-  appendValueCell(summary, 'Keeper', player.keeperOptionTotal, state.maxKeeper, true);
+  appendRankCell(summary, 'Dynasty', player.fantasyProsDynastyEcr2026);
   summary.append(createElement('span', 'expand-indicator'));
   details.append(summary);
 
   const detailGrid = createElement('div', 'player-details');
-  const forecast = createElement('section', 'detail-card');
-  forecast.append(createElement('h3', '', 'Future rank'));
-  appendDetailRow(forecast, '2027 median', formatValue(player.predicted2027RankMedian, 1));
-  appendDetailRow(forecast, '2028 median', formatValue(player.predicted2028RankMedian, 1));
+  const current = createElement('section', 'detail-card');
+  current.append(createElement('h3', '', 'Current draft'));
+  appendDetailRow(current, 'BEER+', formatValue(player.beerPlus));
+  appendDetailRow(current, 'Board rank', formatRank(player.overallRank));
+
+  const dynasty = createElement('section', 'detail-card');
+  dynasty.append(createElement('h3', '', 'Future proxy'));
+  appendDetailRow(dynasty, 'Dynasty ECR', formatRank(player.fantasyProsDynastyEcr2026));
+  appendDetailRow(dynasty, 'Source snapshot', state.metadata?.sources?.dynastyRanking?.snapshotDate ?? '—');
 
   const roundThree = createElement('section', 'detail-card');
   roundThree.append(createElement('h3', '', 'Round 3 keeper'));
-  appendDetailRow(roundThree, '2027 probability', formatProbability(player.keeperProbabilityRound3));
-  appendDetailRow(roundThree, '2027 surplus', formatValue(player.keeperSurplus2027Round3));
-  appendDetailRow(roundThree, '2028 surplus', formatValue(player.keeperSurplus2028Round3));
-  appendDetailRow(roundThree, '2nd-year chance', formatProbability(player.secondYearProbabilityGivenRound3));
-  appendDetailRow(roundThree, '2-year option', formatValue(player.keeperSurplusTotalRound3));
+  appendDetailRow(roundThree, 'Pick cost', '#25–36');
+  appendDetailRow(roundThree, 'Rank edge', formatRankEdgeRange(player.keeperRound3RankEdgeMin, player.keeperRound3RankEdgeMax));
+  appendDetailRow(roundThree, 'Comparison', comparisonLabel(player.keeperRound3Comparison));
 
   const roundFour = createElement('section', 'detail-card');
   roundFour.append(createElement('h3', '', 'Round 4 keeper'));
-  appendDetailRow(roundFour, '2027 probability', formatProbability(player.keeperProbabilityRound4));
-  appendDetailRow(roundFour, '2027 surplus', formatValue(player.keeperSurplus2027Round4));
-  appendDetailRow(roundFour, '2028 surplus', formatValue(player.keeperSurplus2028Round4));
-  appendDetailRow(roundFour, '2nd-year chance', formatProbability(player.secondYearProbabilityGivenRound4));
-  appendDetailRow(roundFour, '2-year option', formatValue(player.keeperSurplusTotalRound4));
+  appendDetailRow(roundFour, 'Pick cost', '#37–48');
+  appendDetailRow(roundFour, 'Rank edge', formatRankEdgeRange(player.keeperRound4RankEdgeMin, player.keeperRound4RankEdgeMax));
+  appendDetailRow(roundFour, 'Comparison', comparisonLabel(player.keeperRound4Comparison));
 
-  const composite = createElement('section', 'detail-card');
-  composite.append(createElement('h3', '', 'Neutral composite'));
-  appendDetailRow(composite, '2027 option', formatValue(player.keeperOption2027));
-  appendDetailRow(composite, '2028 option', formatValue(player.keeperOption2028));
-  appendDetailRow(composite, 'Total option', formatValue(player.keeperOptionTotal));
-
-  detailGrid.append(forecast, roundThree, roundFour, composite);
-  const confidence = player.modelConfidence || 'not reported';
-  detailGrid.append(createElement('p', 'confidence-note', `Model confidence: ${confidence}. Keeper value is conditional on being drafted after Round 2.`));
+  detailGrid.append(current, dynasty, roundThree, roundFour);
+  detailGrid.append(createElement('p', 'confidence-note', 'Positive rank edge means the dynasty rank is earlier than the forfeited pick. Keeper eligibility still depends on the player actually being drafted after Round 2.'));
   details.append(detailGrid);
   return details;
 }
@@ -293,7 +311,7 @@ function renderRosterPlayer(slot, player) {
     content.append(createElement('strong', '', player.name));
     const values = Number.isFinite(Number(player.beerPlus))
       ? `${player.position} · ${player.team || 'FA'} · BEER+ ${formatValue(player.beerPlus)}`
-      : `${player.position || '—'} · ${player.team || 'FA'} · No model value`;
+      : `${player.position || '—'} · ${player.team || 'FA'} · No BEER+ value`;
     content.append(createElement('span', '', values));
   }
   row.append(content);
@@ -772,6 +790,11 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
+  const availableSorts = new Set([...elements.sortBy.options].map((option) => option.value));
+  if (!availableSorts.has(state.filters.sortBy)) {
+    state.filters.sortBy = 'rank';
+    storageSet(localStorage, STORAGE.sortBy, state.filters.sortBy);
+  }
   elements.sortBy.value = state.filters.sortBy;
   elements.showDrafted.checked = state.filters.showDrafted;
   const savedLeagueId = storageGet(localStorage, STORAGE.leagueId);

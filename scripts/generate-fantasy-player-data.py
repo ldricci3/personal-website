@@ -1,32 +1,37 @@
 #!/usr/bin/env python3
-"""Generate the static fantasy player-value dataset from the calibrated model.
+"""Generate the fantasy draft board with direct dynasty keeper comparisons.
 
-The authoritative model and its inputs live in the Fantasy Draft Primer goal.
-This script never edits those files: it copies the model to a temporary directory,
-applies the small full-board scoring adaptation there, runs it, and transforms the
-result into static JSON for the website.
+Current BEER+ values come from the existing Subvertadown board. Future value is
+not forecast: it is the latest FantasyPros consensus dynasty-overall ECR from
+the DynastyProcess snapshot, compared directly with Round 3 and Round 4 costs.
 """
 from __future__ import annotations
 
 import argparse
 import csv
-from datetime import date
+from datetime import datetime
 import json
 import math
-import os
 from pathlib import Path
 import re
-import subprocess
-import sys
-import tempfile
 import unicodedata
+from zoneinfo import ZoneInfo
 
-DEFAULT_MODEL = Path("/home/hatch/workspace/goals/fantasy-football-draft-primer/hidden_files/keeper-model-results/build_keeper_model.py")
-DEFAULT_EXISTING_SCORES = Path("/home/hatch/workspace/goals/fantasy-football-draft-primer/hidden_files/keeper-model-results/scored_players.csv")
-DEFAULT_CROSSWALK = Path("/home/hatch/workspace/goals/fantasy-football-draft-primer/hidden_files/keeper-model-inputs/dynastyprocess/db_playerids.csv")
+DEFAULT_BOARD = Path(
+    "/home/hatch/workspace/goals/fantasy-football-draft-primer/hidden_files/keeper-model-results/scored_players.csv"
+)
+DEFAULT_DYNASTY_ECR = Path(
+    "/home/hatch/workspace/goals/fantasy-football-draft-primer/hidden_files/keeper-model-inputs/dynastyprocess/db_fpecr_latest.csv"
+)
+DEFAULT_CROSSWALK = Path(
+    "/home/hatch/workspace/goals/fantasy-football-draft-primer/hidden_files/keeper-model-inputs/dynastyprocess/db_playerids.csv"
+)
 DEFAULT_OUTPUT = Path("site/fantasy/data/player-values.json")
 
-# Team spellings differ between sources. Keep this explicit and auditable.
+POSITIONS = {"QB", "RB", "WR", "TE"}
+ROUND_3_RANGE = (25, 36)
+ROUND_4_RANGE = (37, 48)
+
 TEAM_ALIASES = {
     "JAX": "JAC",
     "LV": "LVR",
@@ -36,36 +41,14 @@ TEAM_ALIASES = {
     "WSH": "WAS",
 }
 
-# Only add an entry after verifying that the source and crosswalk refer to the
-# same player. The current 2026 dataset needs no player-name aliases.
 PLAYER_NAME_ALIASES: dict[str, str] = {}
 
-MODEL_NUMERIC_FIELDS = {
+BOARD_NUMERIC_FIELDS = {
     "Overall Rank": ("overallRank", int),
     "Position Rank": ("positionRank", int),
     "Team Depth": ("teamDepth", int),
     "Bye Week": ("byeWeek", int),
     "BEER+ Value": ("beerPlus", float),
-    "fantasypros_id": ("fantasyProsId", int),
-    "fp_redraft_ecr_2026": ("fantasyProsRedraftEcr2026", float),
-    "fp_dynasty_ecr_2026": ("fantasyProsDynastyEcr2026", float),
-    "predicted_2027_rank_median": ("predicted2027RankMedian", float),
-    "predicted_2028_rank_median": ("predicted2028RankMedian", float),
-    "keeper_prob_r3": ("keeperProbabilityRound3", float),
-    "keeper_prob_r4": ("keeperProbabilityRound4", float),
-    "keeper_option_2027_r3": ("keeperSurplus2027Round3", float),
-    "keeper_option_2027_r4": ("keeperSurplus2027Round4", float),
-    "keeper_option_2028_r3": ("keeperSurplus2028Round3", float),
-    "keeper_option_2028_r4": ("keeperSurplus2028Round4", float),
-    "keeper_option_total_r3": ("keeperSurplusTotalRound3", float),
-    "keeper_option_total_r4": ("keeperSurplusTotalRound4", float),
-    "keeper_option_2027": ("keeperOption2027", float),
-    "keeper_option_2028": ("keeperOption2028", float),
-    "keeper_option_total": ("keeperOptionTotal", float),
-    "keeper_total_discount_40": ("keeperOptionTotalDiscount40", float),
-    "keeper_total_discount_80": ("keeperOptionTotalDiscount80", float),
-    "prob_second_year_given_r3": ("secondYearProbabilityGivenRound3", float),
-    "prob_second_year_given_r4": ("secondYearProbabilityGivenRound4", float),
 }
 
 
@@ -81,6 +64,10 @@ def normalize_team(value: str) -> str:
     return TEAM_ALIASES.get(team, team)
 
 
+def player_key(name: str, position: str) -> str:
+    return f"{normalize_name(name)}:{position.strip().upper()}"
+
+
 def present(value: str | None) -> bool:
     return bool(value and value.strip() and value.strip().upper() not in {"NA", "N/A", "NULL", "NONE"})
 
@@ -92,219 +79,214 @@ def as_int(value: str) -> int:
     return int(number)
 
 
-def adapt_model(source: Path, destination: Path) -> None:
-    text = source.read_text()
-    replacements = {
-        "OUT = ROOT/'goals/fantasy-football-draft-primer/hidden_files/keeper-model-results'":
-            "OUT = Path(__import__('os').environ['FANTASY_MODEL_OUT'])",
-        "BOARD_PATH = ROOT/'your_files/subvertadown-2026-unadjusted-values/Subvertadown 2026 Unadjusted Values.csv'":
-            "BOARD_PATH = Path(__import__('os').environ['FANTASY_BOARD_INPUT'])",
-        "    out=board.copy()\n    # current is board-ordered.":
-            "    out=board.copy()\n    out['fantasypros_id']=current.id.to_numpy()\n    # current is board-ordered.",
-        "    for i,row in current.reset_index(drop=True).iterrows():\n":
-            "    current_reset=current.reset_index(drop=True)\n    score_order=list(board.index[board['Overall Rank']>24])+list(board.index[board['Overall Rank']<=24])\n    for i in score_order:\n        row=current_reset.iloc[i]\n",
-        "        if int(board.iloc[i]['Overall Rank'])<=24: continue\n": "",
-        "    assert scored.loc[scored['Overall Rank']<=24,'keeper_option_total'].isna().all()\n":
-            "    assert scored['keeper_option_total'].notna().all()\n",
-        "    assert scored.loc[scored['Overall Rank']>24,'keeper_option_total'].notna().all()\n": "",
-        "    vals=scored.loc[scored['Overall Rank']>24,['keeper_prob_r3','keeper_prob_r4','keeper_option_total']].to_numpy(float)":
-            "    vals=scored[['keeper_prob_r3','keeper_prob_r4','keeper_option_total']].to_numpy(float)",
-    }
-    for old, new in replacements.items():
-        if text.count(old) != 1:
-            raise RuntimeError(f"Model adaptation point changed or is ambiguous: {old!r}")
-        text = text.replace(old, new)
-    destination.write_text(text)
+def as_float(value: str, field: str, player: str) -> float:
+    if not present(value):
+        raise ValueError(f"Missing numeric field {field!r} for {player}")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"Non-finite numeric field {field!r} for {player}")
+    return number
 
 
-def run_full_model(model_path: Path, existing_scores: Path, temp_dir: Path) -> Path:
-    copied_model = temp_dir / "build_keeper_model_full_board.py"
-    model_output = temp_dir / "model-output"
-    model_output.mkdir()
-    adapt_model(model_path, copied_model)
-    env = os.environ.copy()
-    env["FANTASY_MODEL_OUT"] = str(model_output)
-    env["FANTASY_BOARD_INPUT"] = str(existing_scores)
-    completed = subprocess.run(
-        [sys.executable, str(copied_model)],
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if completed.returncode:
-        raise RuntimeError(
-            "Full-board model run failed.\n"
-            f"stdout:\n{completed.stdout}\n"
-            f"stderr:\n{completed.stderr}"
-        )
-    return model_output / "scored_players.csv"
+def convert_board_number(source: str, converter: type[int] | type[float], field: str, player: str) -> int | float:
+    if converter is int:
+        if not present(source):
+            raise ValueError(f"Missing numeric field {field!r} for {player}")
+        return as_int(source)
+    return as_float(source, field, player)
 
 
-def load_crosswalk(path: Path) -> tuple[dict[int, list[dict[str, str]]], list[dict[str, str]]]:
+def load_board(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
-    usable = [row for row in rows if present(row.get("sleeper_id"))]
+    if len(rows) != 219:
+        raise RuntimeError(f"Expected 219 board players, found {len(rows)}")
+    ranks = [as_int(row["Overall Rank"]) for row in rows]
+    if sorted(ranks) != list(range(1, 220)):
+        raise RuntimeError("Board must contain each overall rank from 1 through 219 exactly once")
+    keys = [player_key(row["Player"], row["Position"]) for row in rows]
+    if len(set(keys)) != len(keys):
+        raise RuntimeError("Board player name + position keys are not unique")
+    return rows
+
+
+def load_latest_dynasty_ecr(path: Path) -> tuple[dict[str, dict[str, str]], str, str, str]:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    candidates = [
+        row for row in rows
+        if row.get("page_type") == "dynasty-overall"
+        and row.get("pos", "").strip().upper() in POSITIONS
+        and present(row.get("scrape_date"))
+    ]
+    if not candidates:
+        raise RuntimeError("No FantasyPros dynasty-overall rows found")
+    snapshot_date = max(row["scrape_date"].strip()[:10] for row in candidates)
+    snapshot = [row for row in candidates if row["scrape_date"].strip()[:10] == snapshot_date]
+    pages = {row.get("fp_page", "").strip() for row in snapshot}
+    ecr_types = {row.get("ecr_type", "").strip() for row in snapshot}
+    if len(pages) != 1 or len(ecr_types) != 1:
+        raise RuntimeError("Dynasty snapshot has ambiguous source-page metadata")
+
+    by_key: dict[str, dict[str, str]] = {}
+    for row in snapshot:
+        key = player_key(row["player"], row["pos"])
+        if key in by_key:
+            raise RuntimeError(f"Ambiguous dynasty ECR match for {key}")
+        as_int(row["id"])
+        as_float(row["ecr"], "ecr", row["player"])
+        by_key[key] = row
+    return by_key, snapshot_date, next(iter(pages)), next(iter(ecr_types))
+
+
+def load_crosswalk(path: Path) -> dict[int, dict[str, str]]:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    usable = [
+        row for row in rows
+        if present(row.get("fantasypros_id"))
+        and present(row.get("sleeper_id"))
+        and present(row.get("db_season"))
+    ]
     usable.sort(key=lambda row: as_int(row["db_season"]), reverse=True)
-
-    by_fantasypros: dict[int, list[dict[str, str]]] = {}
+    latest_by_fantasypros: dict[int, dict[str, str]] = {}
     for row in usable:
-        if present(row.get("fantasypros_id")):
-            by_fantasypros.setdefault(as_int(row["fantasypros_id"]), []).append(row)
-
-    # Fallback matching considers only the latest record for each Sleeper ID.
-    latest_by_sleeper: dict[str, dict[str, str]] = {}
-    for row in usable:
-        latest_by_sleeper.setdefault(row["sleeper_id"].strip(), row)
-    latest = list(latest_by_sleeper.values())
-    return by_fantasypros, latest
-
-
-def unique_sleeper(rows: list[dict[str, str]]) -> str | None:
-    ids = {row["sleeper_id"].strip() for row in rows}
-    return next(iter(ids)) if len(ids) == 1 else None
+        fantasypros_id = as_int(row["fantasypros_id"])
+        existing = latest_by_fantasypros.get(fantasypros_id)
+        if existing and as_int(existing["db_season"]) == as_int(row["db_season"]):
+            if existing["sleeper_id"].strip() != row["sleeper_id"].strip():
+                raise RuntimeError(f"Conflicting Sleeper IDs for FantasyPros ID {fantasypros_id}")
+            continue
+        latest_by_fantasypros.setdefault(fantasypros_id, row)
+    return latest_by_fantasypros
 
 
-def find_sleeper_id(
-    player: dict[str, str],
-    by_fantasypros: dict[int, list[dict[str, str]]],
-    latest: list[dict[str, str]],
-) -> tuple[str | None, str, dict[str, str] | None]:
-    fantasypros_id = as_int(player["fantasypros_id"])
-    direct = by_fantasypros.get(fantasypros_id, [])
-    if direct:
-        latest_season = max(as_int(row["db_season"]) for row in direct)
-        latest_direct = [row for row in direct if as_int(row["db_season"]) == latest_season]
-        sleeper_id = unique_sleeper(latest_direct)
-        if sleeper_id:
-            return sleeper_id, "fantasyProsId", latest_direct[0]
-        raise RuntimeError(f"Conflicting latest-season Sleeper IDs for FantasyPros ID {fantasypros_id}")
-
-    name = normalize_name(player["Player"])
-    position = player["Position"].strip().upper()
-    team = normalize_team(player["Team"])
-    candidates = [
-        row for row in latest
-        if normalize_name(row["name"]) == name
-        and row["position"].strip().upper() == position
-        and normalize_team(row["team"]) == team
-    ]
-    sleeper_id = unique_sleeper(candidates)
-    if sleeper_id:
-        return sleeper_id, "namePositionTeam", candidates[0]
-
-    # A traded/free-agent team can be stale in either source. Permit a teamless
-    # fallback only when normalized name + position resolves to one Sleeper ID.
-    candidates = [
-        row for row in latest
-        if normalize_name(row["name"]) == name
-        and row["position"].strip().upper() == position
-    ]
-    sleeper_id = unique_sleeper(candidates)
-    if sleeper_id:
-        return sleeper_id, "namePositionUnique", candidates[0]
-    return None, "unmatched", None
+def comparison_for_rank(rank: float, pick_range: tuple[int, int]) -> str:
+    first_pick, last_pick = pick_range
+    if rank < first_pick:
+        return "aheadOfRound"
+    if rank <= last_pick:
+        return "withinRound"
+    return "behindRound"
 
 
-def convert_number(source: str, converter: type[int] | type[float], field: str, player: str) -> int | float:
-    if not present(source):
-        raise ValueError(f"Missing numeric field {field!r} for {player}")
-    value = converter(source) if converter is float else as_int(source)
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError(f"Non-finite numeric field {field!r} for {player}")
-    return value
+def rank_edges(rank: float, pick_range: tuple[int, int]) -> tuple[float, float]:
+    first_pick, last_pick = pick_range
+    return round(first_pick - rank, 2), round(last_pick - rank, 2)
 
 
-def build_payload(scored_csv: Path, crosswalk_csv: Path, model_source: Path) -> dict[str, object]:
-    with scored_csv.open(newline="", encoding="utf-8-sig") as handle:
-        scored = list(csv.DictReader(handle))
-    if len(scored) != 219:
-        raise RuntimeError(f"Expected 219 scored players, found {len(scored)}")
+def build_payload(
+    board_csv: Path,
+    dynasty_ecr_csv: Path,
+    crosswalk_csv: Path,
+) -> dict[str, object]:
+    board = load_board(board_csv)
+    dynasty_by_key, snapshot_date, source_page, ecr_type = load_latest_dynasty_ecr(dynasty_ecr_csv)
+    crosswalk = load_crosswalk(crosswalk_csv)
 
-    by_fantasypros, latest = load_crosswalk(crosswalk_csv)
     players: list[dict[str, object]] = []
-    unmatched: list[dict[str, object]] = []
-    methods: dict[str, int] = {}
+    missing_dynasty: list[str] = []
+    missing_sleeper: list[dict[str, object]] = []
     match_seasons: dict[str, int] = {}
 
-    for row in scored:
+    for row in board:
         name = row["Player"]
-        sleeper_id, match_method, matched_row = find_sleeper_id(row, by_fantasypros, latest)
-        methods[match_method] = methods.get(match_method, 0) + 1
-        match_season = as_int(matched_row["db_season"]) if matched_row else None
+        position = row["Position"].strip().upper()
+        key = player_key(name, position)
+        dynasty_row = dynasty_by_key.get(key)
+        if dynasty_row is None:
+            missing_dynasty.append(f"{name} ({position})")
+            continue
+
+        fantasypros_id = as_int(dynasty_row["id"])
+        dynasty_rank = as_float(dynasty_row["ecr"], "ecr", name)
+        crosswalk_row = crosswalk.get(fantasypros_id)
+        sleeper_id = crosswalk_row["sleeper_id"].strip() if crosswalk_row else None
+        match_season = as_int(crosswalk_row["db_season"]) if crosswalk_row else None
         if match_season is not None:
-            key = str(match_season)
-            match_seasons[key] = match_seasons.get(key, 0) + 1
-        model_key = f"{normalize_name(name)}:{row['Position'].strip().lower()}"
+            season_key = str(match_season)
+            match_seasons[season_key] = match_seasons.get(season_key, 0) + 1
+        if sleeper_id is None:
+            missing_sleeper.append({
+                "modelKey": f"{normalize_name(name)}:{position.lower()}",
+                "name": name,
+                "position": position,
+                "fantasyProsId": fantasypros_id,
+            })
+
+        round3_min, round3_max = rank_edges(dynasty_rank, ROUND_3_RANGE)
+        round4_min, round4_max = rank_edges(dynasty_rank, ROUND_4_RANGE)
         item: dict[str, object] = {
-            "modelKey": model_key,
+            "modelKey": f"{normalize_name(name)}:{position.lower()}",
             "sleeperId": sleeper_id,
             "name": name,
-            "position": row["Position"],
+            "position": position,
             "team": row["Team"],
             "draftSlot": row["Draft Slot"],
             "adpDeltaDisplay": row["ADP Delta Display"],
             "primaryValue": row["Primary Value"],
             "sourceDraftUrl": row["Source Draft URL"],
-            "modelCoverage": row["model_coverage"],
-            "modelConfidence": row["model_confidence"],
-            "modelKeyInputs": row["model_key_inputs"],
-            "sleeperMatchMethod": match_method,
+            "fantasyProsId": fantasypros_id,
+            "fantasyProsDynastyEcr2026": dynasty_rank,
+            "keeperRound3Comparison": comparison_for_rank(dynasty_rank, ROUND_3_RANGE),
+            "keeperRound3RankEdgeMin": round3_min,
+            "keeperRound3RankEdgeMax": round3_max,
+            "keeperRound4Comparison": comparison_for_rank(dynasty_rank, ROUND_4_RANGE),
+            "keeperRound4RankEdgeMin": round4_min,
+            "keeperRound4RankEdgeMax": round4_max,
+            "sleeperMatchMethod": "fantasyProsId" if sleeper_id else "unmatched",
             "sleeperMatchSeason": match_season,
         }
-        for source_key, (output_key, converter) in MODEL_NUMERIC_FIELDS.items():
-            item[output_key] = convert_number(row[source_key], converter, source_key, name)
+        for source_key, (output_key, converter) in BOARD_NUMERIC_FIELDS.items():
+            item[output_key] = convert_board_number(row[source_key], converter, source_key, name)
         players.append(item)
-        if sleeper_id is None:
-            unmatched.append({
-                "modelKey": model_key,
-                "name": name,
-                "position": row["Position"],
-                "team": row["Team"],
-                "fantasyProsId": item["fantasyProsId"],
-            })
 
-    keys = [player["modelKey"] for player in players]
-    if len(set(keys)) != len(keys):
-        raise RuntimeError("Generated model keys are not unique")
+    if missing_dynasty:
+        raise RuntimeError(f"Missing direct dynasty ECR for {len(missing_dynasty)} players: {missing_dynasty}")
+    if len(players) != 219:
+        raise RuntimeError(f"Expected 219 generated players, found {len(players)}")
+    if len({player["fantasyProsId"] for player in players}) != 219:
+        raise RuntimeError("FantasyPros IDs are not unique across all 219 players")
 
-    matched = len(players) - len(unmatched)
+    matched = len(players) - len(missing_sleeper)
     return {
         "metadata": {
-            "generatedDate": date.today().isoformat(),
+            "generatedDate": datetime.now(ZoneInfo("America/New_York")).date().isoformat(),
             "rowCount": len(players),
             "sleeperIdCoverage": {
                 "matched": matched,
-                "unmatched": len(unmatched),
+                "unmatched": len(missing_sleeper),
                 "percent": round(100 * matched / len(players), 2),
-                "matchMethods": methods,
+                "matchMethods": {"fantasyProsId": matched},
                 "matchSeasons": match_seasons,
-                "unmatchedPlayers": unmatched,
+                "unmatchedPlayers": missing_sleeper,
             },
             "sources": {
-                "modelPipeline": model_source.name,
-                "sleeperCrosswalk": "DynastyProcess db_playerids.csv",
-                "currentValues": "Subvertadown 2026 unadjusted half-PPR BEER+ draft board consumed by the model pipeline",
-                "forecastInputs": "DynastyProcess FantasyPros preseason redraft/dynasty ECR and nflverse player/production data",
-            },
-            "model": {
-                "forecastSeasons": [2027, 2028],
-                "keeperCosts": {"round3PickRange": [25, 36], "round4PickRange": [37, 48]},
-                "secondYearDiscount": 0.6,
-                "monteCarloDraws": 20000,
-                "seed": 20260905,
-                "aliases": {
-                    "team": TEAM_ALIASES,
-                    "playerName": PLAYER_NAME_ALIASES,
+                "currentValues": "Subvertadown 2026 unadjusted half-PPR BEER+ draft board",
+                "dynastyRanking": {
+                    "provider": "FantasyPros",
+                    "dataset": "DynastyProcess db_fpecr_latest.csv",
+                    "pageType": "dynasty-overall",
+                    "sourcePage": source_page,
+                    "ecrType": ecr_type,
+                    "snapshotDate": snapshot_date,
+                    "scoringFormat": "Not identified in the source dataset; this is not labeled half-PPR.",
+                    "matchedPlayers": len(players),
+                    "matching": "Unique normalized player name plus position; FantasyPros ID retained for Sleeper crosswalk.",
                 },
-                "caveats": [
-                    "Forecasts are calibrated from preseason ranks available for 2021-2026; the historical window is limited.",
-                    "2027 and 2028 ranks are distributions inferred from out-of-time residuals, not guarantees of future performance.",
-                    "The generic keeper-option values equally weight Round 3 and Round 4 assignment; enforce the league's two-keeper limit at roster level.",
-                    "Top-24 players are scored for fall-past-Round-2 scenarios even though they are not normally keeper-eligible at their listed rank.",
-                    "Model confidence is coarse and describes input completeness, not a calibrated confidence interval.",
-                ],
+                "sleeperCrosswalk": "DynastyProcess db_playerids.csv",
+            },
+            "keeperComparison": {
+                "method": "Direct FantasyPros consensus dynasty ECR compared with the possible pick costs in each keeper round. No forecast, simulation, probability, or multi-year weighting is used.",
+                "round3PickRange": list(ROUND_3_RANGE),
+                "round4PickRange": list(ROUND_4_RANGE),
+                "rankEdgeFormula": "cost pick minus dynasty ECR; positive means the player is ranked earlier than the cost",
+                "eligibility": "A player is eligible only if actually drafted after Round 2; every board player is scored because draft-day falls determine eligibility.",
+                "caveat": "Dynasty ECR values youth and long careers more than this league's two-season keeper window, so older productive players may look conservative.",
+            },
+            "aliases": {
+                "team": TEAM_ALIASES,
+                "playerName": PLAYER_NAME_ALIASES,
             },
         },
         "players": players,
@@ -313,8 +295,8 @@ def build_payload(scored_csv: Path, crosswalk_csv: Path, model_source: Path) -> 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
-    parser.add_argument("--existing-scores", type=Path, default=DEFAULT_EXISTING_SCORES)
+    parser.add_argument("--board", type=Path, default=DEFAULT_BOARD)
+    parser.add_argument("--dynasty-ecr", type=Path, default=DEFAULT_DYNASTY_ECR)
     parser.add_argument("--crosswalk", type=Path, default=DEFAULT_CROSSWALK)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser.parse_args()
@@ -322,16 +304,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    for path in [args.model, args.existing_scores, args.crosswalk]:
+    for path in [args.board, args.dynasty_ecr, args.crosswalk]:
         if not path.is_file():
             raise FileNotFoundError(path)
-    with tempfile.TemporaryDirectory(prefix="fantasy-player-data-") as temp:
-        scored_csv = run_full_model(args.model, args.existing_scores, Path(temp))
-        payload = build_payload(scored_csv, args.crosswalk, args.model)
+    payload = build_payload(args.board, args.dynasty_ecr, args.crosswalk)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-    coverage = payload["metadata"]["sleeperIdCoverage"]
-    print(json.dumps({"output": str(args.output), "rowCount": len(payload["players"]), "sleeperIdCoverage": coverage}, indent=2))
+    print(json.dumps({
+        "output": str(args.output),
+        "rowCount": len(payload["players"]),
+        "dynastySnapshotDate": payload["metadata"]["sources"]["dynastyRanking"]["snapshotDate"],
+        "sleeperIdCoverage": payload["metadata"]["sleeperIdCoverage"],
+    }, indent=2))
 
 
 if __name__ == "__main__":

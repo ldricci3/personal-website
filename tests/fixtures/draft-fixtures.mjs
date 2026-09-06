@@ -1,19 +1,19 @@
 export const players = [
   {
     playerKey: 'alpha-wr', sleeperId: '101', name: 'Alpha Receiver', position: 'WR', team: 'BUF',
-    overallRank: 3, beerPlus: 8.5, keeperOptionTotal: 1.4, keeperSurplusTotalRound3: 1.1, keeperSurplusTotalRound4: 1.7,
+    overallRank: 3, beerPlus: 8.5, fantasyProsDynastyEcr2026: 2.5,
   },
   {
     playerKey: 'beta-rb', sleeperId: '102', name: 'Beta Runner Jr.', aliases: ['Beta Runner'], position: 'RB', team: 'DET',
-    overallRank: 1, beerPlus: 9.2, keeperOptionTotal: 0.8, keeperSurplusTotalRound3: 0.5, keeperSurplusTotalRound4: 1.1,
+    overallRank: 1, beerPlus: 9.2, fantasyProsDynastyEcr2026: 18.2,
   },
   {
     playerKey: 'gamma-qb', sleeperId: '103', name: 'Gamma Quarterback', position: 'QB', team: 'KC',
-    overallRank: 2, beerPlus: 5.1, keeperOptionTotal: 2.1, keeperSurplusTotalRound3: 1.8, keeperSurplusTotalRound4: 2.4,
+    overallRank: 2, beerPlus: 5.1, fantasyProsDynastyEcr2026: 1.4,
   },
   {
     playerKey: 'delta-te', sleeperId: '104', name: 'Delta Tight End', position: 'TE', team: 'SF',
-    overallRank: 4, beerPlus: 4.2, keeperOptionTotal: 0.4, keeperSurplusTotalRound3: 0.2, keeperSurplusTotalRound4: 0.6,
+    overallRank: 4, beerPlus: 4.2, fantasyProsDynastyEcr2026: 42.7,
   },
 ];
 

@@ -28,12 +28,12 @@ const TEAM_ALIASES = Object.freeze({
 const SORTERS = Object.freeze({
   rank: (a, b) => numeric(a.overallRank, Number.MAX_SAFE_INTEGER) - numeric(b.overallRank, Number.MAX_SAFE_INTEGER),
   beer: (a, b) => numeric(b.beerPlus) - numeric(a.beerPlus),
-  keeperTotal: (a, b) => numeric(b.keeperOptionTotal) - numeric(a.keeperOptionTotal),
-  keeperR3: (a, b) => numeric(b.keeperSurplusTotalRound3) - numeric(a.keeperSurplusTotalRound3),
-  keeperR4: (a, b) => numeric(b.keeperSurplusTotalRound4) - numeric(a.keeperSurplusTotalRound4),
+  dynasty: (a, b) => numeric(a.fantasyProsDynastyEcr2026, Number.MAX_SAFE_INTEGER)
+    - numeric(b.fantasyProsDynastyEcr2026, Number.MAX_SAFE_INTEGER),
 });
 
 function numeric(value, fallback = 0) {
+  if (value === null || value === undefined || value === '') return fallback;
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
 }
@@ -180,8 +180,8 @@ export function playerFromPick(pick, playerIndex = new Map(), players = []) {
     position: normalizePosition(metadata.position ?? pick?.position),
     team: String(metadata.team ?? pick?.team ?? '').toUpperCase(),
     beerPlus: null,
-    keeperOptionTotal: null,
-    modelCoverage: 'not_in_value_model',
+    fantasyProsDynastyEcr2026: null,
+    valueCoverage: 'not_in_player_values',
     pickNumber: numeric(pick?.pick_no),
     rawPick: pick,
   };
