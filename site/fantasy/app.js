@@ -3,11 +3,15 @@ import {
   accountLeagueStorageKey,
   assignRosterSlots,
   buildTeamOptions,
+  buildValueCurve,
   chooseInitialConnection,
   createContextGate,
+  curvePositionForSelectedPlayer,
   defaultSortDirection,
   draftPicksSignature,
+  draftPlayerCutoff,
   filterAndSortPlayers,
+  filtersForSelectedPlayer,
   freshSleeperPath,
   getPickedPlayerKeys,
   isStandaloneDraft,
@@ -15,6 +19,7 @@ import {
   isValidSleeperId,
   leagueDraftStorageKey,
   loadCachedPicks,
+  nearestCurvePoint,
   nextPickStatus,
   nextSortState,
   normalizeDraftPicks,
@@ -26,12 +31,16 @@ import {
   saveCachedPicks,
   selectDraftId,
   selectLeagueId,
+  snakeDraftPickNumbers,
   storageGet,
   storageRemove,
   storageSet,
+  togglePlayerSelection,
 } from './draft-core.js';
 
 const API_BASE = 'https://api.sleeper.app/v1';
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const CURVE_POSITIONS = new Set(['ALL', 'QB', 'RB', 'WR', 'TE']);
 const POLL_INTERVAL_MS = 5_000;
 const FETCH_TIMEOUT_MS = 8_000;
 const SEASON = '2026';
@@ -74,6 +83,11 @@ const state = {
     sortDirection: storageGet(localStorage, STORAGE.sortDirection),
     showDrafted: storageGet(localStorage, STORAGE.showDrafted) === 'true',
   },
+  workspaceView: 'table',
+  curvePosition: 'ALL',
+  showDeeperPlayers: false,
+  selectedPlayerKey: '',
+  curveResizeFrame: null,
   pollTimer: null,
   refreshing: false,
   accountRequestId: 0,
@@ -109,6 +123,15 @@ const elements = {
   playerList: document.querySelector('#player-list'),
   emptyState: document.querySelector('#empty-state'),
   loadingTemplate: document.querySelector('#loading-row-template'),
+  workspaceViewButtons: [...document.querySelectorAll('[data-workspace-view]')],
+  playersPanel: document.querySelector('.players-panel'),
+  curvePanel: document.querySelector('#curve-panel'),
+  curvePositionButtons: [...document.querySelectorAll('[data-curve-position]')],
+  curveDepthToggle: document.querySelector('#curve-depth-toggle'),
+  curveDepthNote: document.querySelector('#curve-depth-note'),
+  curveChart: document.querySelector('#value-curve-chart'),
+  curvePickNote: document.querySelector('#curve-pick-note'),
+  curvePlayerDetails: document.querySelector('#curve-player-details'),
   rosterSlots: document.querySelector('#roster-slots'),
   rosterPrompt: document.querySelector('#roster-prompt'),
   rosterCount: document.querySelector('#roster-count'),
@@ -135,6 +158,311 @@ function formatDynastyRank(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
   return Number.isInteger(number) ? String(number) : number.toFixed(1);
+}
+
+function createSvgElement(tag, attributes = {}, text = '') {
+  const element = document.createElementNS(SVG_NS, tag);
+  for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, String(value));
+  if (text) element.textContent = text;
+  return element;
+}
+
+function setMobileView(view) {
+  document.body.dataset.mobileView = view;
+  for (const tab of elements.mobileViewButtons) {
+    const active = tab.dataset.view === view;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-pressed', String(active));
+  }
+}
+
+function playerSelectionKey(player) {
+  return String(player?.playerKey || player?.modelKey || player?.sleeperId || '');
+}
+
+function syncTableControls() {
+  elements.search.value = state.filters.search;
+  elements.showDrafted.checked = state.filters.showDrafted;
+  for (const tab of elements.positionTabs) {
+    const active = tab.dataset.position === state.filters.position;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-pressed', String(active));
+  }
+}
+
+function syncCurvePositionTabs() {
+  for (const tab of elements.curvePositionButtons) {
+    const active = tab.dataset.curvePosition === state.curvePosition;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-pressed', String(active));
+  }
+}
+
+function syncCurveDepthToggle() {
+  const cutoff = draftPlayerCutoff(state.draft, state.league);
+  const hasDraftCutoff = Number(state.draft?.settings?.teams) > 0 && Number(state.draft?.settings?.rounds) > 0;
+  const hasLeagueCutoff = Number(state.league?.total_rosters) > 0 && Array.isArray(state.league?.roster_positions)
+    && state.league.roster_positions.length > 0;
+  const rangeLabel = hasDraftCutoff || hasLeagueCutoff
+    ? `the final pick (${cutoff})`
+    : `the 12-team, 15-round fallback (${cutoff})`;
+  elements.curveDepthToggle.textContent = state.showDeeperPlayers ? 'Hide deeper players' : 'Show deeper players';
+  elements.curveDepthToggle.setAttribute('aria-pressed', String(state.showDeeperPlayers));
+  elements.curveDepthNote.textContent = state.showDeeperPlayers
+    ? `Showing all ranked players; the normal range ends at ${rangeLabel}.`
+    : `Showing players through ${rangeLabel}.`;
+}
+
+function playerRowForKey(key) {
+  return [...elements.playerList.querySelectorAll('.player-row')]
+    .find((candidate) => candidate.dataset.playerKey === key);
+}
+
+function curvePointForKey(key) {
+  return [...elements.curveChart.querySelectorAll('.curve-point')]
+    .find((candidate) => candidate.dataset.playerKey === key);
+}
+
+function scrollSelectedRowIntoView() {
+  if (!state.selectedPlayerKey) return;
+  playerRowForKey(state.selectedPlayerKey)?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+}
+
+function setWorkspaceView(view) {
+  state.workspaceView = view === 'curves' ? 'curves' : 'table';
+  const showCurves = state.workspaceView === 'curves';
+  elements.playersPanel.hidden = showCurves;
+  elements.curvePanel.hidden = !showCurves;
+  for (const tab of elements.workspaceViewButtons) {
+    const active = tab.dataset.workspaceView === state.workspaceView;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-pressed', String(active));
+  }
+  setMobileView('players');
+  if (showCurves) renderValueCurve();
+  else window.requestAnimationFrame(scrollSelectedRowIntoView);
+}
+
+function updateCurvePlayerDetails(player = null, { hiddenByFilter = false } = {}) {
+  if (!player) {
+    elements.curvePlayerDetails.replaceChildren(
+      createElement('strong', '', 'Select a player'),
+      createElement('span', '', 'Tap a point or player row for details.'),
+    );
+    return;
+  }
+  const details = createElement(
+    'span',
+    '',
+    `${player.position}${player.team ? ` · ${player.team}` : ''} · Rank ${player.rank} · Value ${formatValue(player.value)}`,
+  );
+  const clear = createElement('button', 'curve-clear-selection', 'Clear');
+  clear.type = 'button';
+  clear.setAttribute('aria-label', `Clear ${player.name} selection`);
+  clear.addEventListener('click', clearPlayerSelection);
+  const children = [createElement('strong', '', player.name), details];
+  if (hiddenByFilter) children.push(createElement('span', 'curve-selection-note', 'Selected player is outside the current chart filter.'));
+  children.push(clear);
+  elements.curvePlayerDetails.replaceChildren(...children);
+}
+
+function updateCurveCallout(player = null) {
+  elements.curveChart.querySelector('.curve-callout')?.remove();
+  if (!player || !Number.isFinite(player.screenX) || !Number.isFinite(player.screenY)) return;
+  const chartWidth = Number(elements.curveChart.getAttribute('width')) || 300;
+  const label = `${player.name} · ${formatValue(player.value)}`;
+  const calloutWidth = Math.min(220, Math.max(110, label.length * 6.2 + 18));
+  const x = Math.min(chartWidth - calloutWidth - 6, Math.max(6, player.screenX - calloutWidth / 2));
+  const y = player.screenY > 58 ? player.screenY - 40 : player.screenY + 12;
+  const group = createSvgElement('g', { class: 'curve-callout', 'aria-hidden': 'true' });
+  group.append(
+    createSvgElement('rect', { x, y, width: calloutWidth, height: 30, rx: 6 }),
+    createSvgElement('text', { x: x + 9, y: y + 19 }, label),
+  );
+  elements.curveChart.append(group);
+}
+
+function clearPlayerSelection() {
+  if (!state.selectedPlayerKey) return;
+  const focusedKey = document.activeElement?.dataset?.playerKey || '';
+  const focusWasRow = document.activeElement?.classList?.contains('player-row');
+  const focusWasPoint = document.activeElement?.classList?.contains('curve-point');
+  state.selectedPlayerKey = '';
+  renderPlayers();
+  renderValueCurve();
+  if (focusedKey && (focusWasRow || focusWasPoint)) {
+    window.requestAnimationFrame(() => {
+      if (focusWasRow) playerRowForKey(focusedKey)?.focus();
+      if (focusWasPoint) curvePointForKey(focusedKey)?.focus();
+    });
+  }
+}
+
+function selectPlayer(player, { source = '', restoreFocus = false } = {}) {
+  const key = playerSelectionKey(player);
+  state.selectedPlayerKey = togglePlayerSelection(state.selectedPlayerKey, key);
+  if (state.selectedPlayerKey && source === 'table') {
+    state.curvePosition = curvePositionForSelectedPlayer(state.curvePosition, player.position);
+    if (Number(player.overallRank) > draftPlayerCutoff(state.draft, state.league)) state.showDeeperPlayers = true;
+    syncCurvePositionTabs();
+    syncCurveDepthToggle();
+  } else if (state.selectedPlayerKey && source === 'curve') {
+    state.filters = filtersForSelectedPlayer(state.filters, player);
+    syncTableControls();
+  }
+  renderPlayers();
+  renderValueCurve();
+  if (restoreFocus) {
+    window.requestAnimationFrame(() => {
+      if (source === 'table') playerRowForKey(key)?.focus();
+      if (source === 'curve') curvePointForKey(key)?.focus();
+    });
+  }
+}
+
+function renderValueCurve() {
+  if (!state.players.length || elements.curvePanel.hidden) return;
+  const cutoff = draftPlayerCutoff(state.draft, state.league);
+  const fullCurve = buildValueCurve(state.players, { pickedKeys: state.pickedPlayerKeys });
+  const visibleCurve = state.showDeeperPlayers
+    ? fullCurve
+    : fullCurve.filter((player) => player.rank <= cutoff);
+  const points = state.curvePosition === 'ALL'
+    ? visibleCurve
+    : visibleCurve.filter((player) => player.position === state.curvePosition);
+  const containerWidth = Math.floor(elements.curveChart.parentElement?.getBoundingClientRect().width || 0);
+  const width = Math.max(300, containerWidth || 900);
+  const height = width < 520 ? 290 : 340;
+  const margin = { top: 20, right: 16, bottom: 46, left: width < 520 ? 42 : 52 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const maxRank = Math.max(1, ...visibleCurve.map((player) => player.rank));
+  const minValue = Math.floor(Math.min(0, ...visibleCurve.map((player) => player.value)));
+  const maxValue = Math.ceil(Math.max(0, ...visibleCurve.map((player) => player.value)));
+  const valueRange = Math.max(1, maxValue - minValue);
+  syncCurveDepthToggle();
+  const mapX = (rank) => margin.left + ((rank - 1) / Math.max(1, maxRank - 1)) * plotWidth;
+  const mapY = (value) => margin.top + ((maxValue - value) / valueRange) * plotHeight;
+
+  elements.curveChart.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  elements.curveChart.setAttribute('width', String(width));
+  elements.curveChart.setAttribute('height', String(height));
+  elements.curveChart.replaceChildren();
+
+  const grid = createSvgElement('g', { class: 'curve-grid', 'aria-hidden': 'true' });
+  for (let index = 0; index <= 4; index += 1) {
+    const value = maxValue - (valueRange * index / 4);
+    const y = mapY(value);
+    grid.append(
+      createSvgElement('line', { x1: margin.left, y1: y, x2: width - margin.right, y2: y }),
+      createSvgElement('text', { x: margin.left - 8, y: y + 4, 'text-anchor': 'end' }, formatValue(value, 1).replace(/\.0$/, '')),
+    );
+  }
+  const rankTicks = [...new Set([1, Math.round(maxRank / 4), Math.round(maxRank / 2), Math.round(maxRank * 3 / 4), maxRank])];
+  for (const rank of rankTicks) {
+    const x = mapX(rank);
+    grid.append(
+      createSvgElement('line', { x1: x, y1: margin.top, x2: x, y2: height - margin.bottom }),
+      createSvgElement('text', { x, y: height - margin.bottom + 20, 'text-anchor': 'middle' }, String(rank)),
+    );
+  }
+  grid.append(
+    createSvgElement('text', { class: 'curve-axis-label', x: margin.left, y: 12 }, 'Value'),
+    createSvgElement('text', {
+      class: 'curve-axis-label',
+      x: margin.left + plotWidth / 2,
+      y: height - 7,
+      'text-anchor': 'middle',
+    }, 'Overall player rank'),
+  );
+  elements.curveChart.append(grid);
+
+  const selection = resolveTeamSelection(state.teamSelectionValue, state.users, state.draft ?? {});
+  const pickNumbers = snakeDraftPickNumbers(state.draft ?? {}, selection).filter((pick) => pick <= maxRank);
+  const markers = createSvgElement('g', { class: 'curve-pick-markers', 'aria-hidden': 'true' });
+  for (const pick of pickNumbers) {
+    const x = mapX(pick);
+    const line = createSvgElement('line', {
+      class: 'curve-pick-marker',
+      x1: x,
+      y1: margin.top,
+      x2: x,
+      y2: height - margin.bottom,
+    });
+    line.append(createSvgElement('title', {}, `Your pick ${pick}`));
+    markers.append(line, createSvgElement('circle', {
+      class: 'curve-pick-marker-dot',
+      cx: x,
+      cy: height - margin.bottom,
+      r: 3,
+    }));
+  }
+  elements.curveChart.append(markers);
+
+  if (pickNumbers.length) {
+    elements.curvePickNote.textContent = `Your picks: ${pickNumbers.join(', ')}`;
+  } else if (!state.draft) {
+    elements.curvePickNote.textContent = 'Connect a draft and choose your team or slot to mark your picks.';
+  } else if (!selection.draftSlot) {
+    elements.curvePickNote.textContent = 'Choose your team or draft slot to mark your picks.';
+  } else {
+    elements.curvePickNote.textContent = 'Pick markers are available for standard snake drafts.';
+  }
+
+  const plotted = points.map((player) => ({ ...player, screenX: mapX(player.rank), screenY: mapY(player.value) }));
+  if (plotted.length > 1) {
+    elements.curveChart.append(createSvgElement('polyline', {
+      class: 'curve-line',
+      points: plotted.map((player) => `${player.screenX},${player.screenY}`).join(' '),
+    }));
+  }
+
+  const pointGroup = createSvgElement('g', { class: 'curve-points' });
+  for (const player of plotted) {
+    const key = playerSelectionKey(player);
+    const selected = key && key === state.selectedPlayerKey;
+    const circle = createSvgElement('circle', {
+      class: `curve-point ${player.drafted ? 'drafted' : 'available'}${selected ? ' selected' : ''}`,
+      cx: player.screenX,
+      cy: player.screenY,
+      r: selected ? 6.5 : (player.drafted ? 3.1 : 3.8),
+      'data-player-key': key,
+      'data-position': player.position,
+      role: 'button',
+      tabindex: '0',
+      'aria-pressed': String(selected),
+      'aria-label': `${player.name}, ${player.position}, rank ${player.rank}, value ${formatValue(player.value)}${player.drafted ? ', drafted' : ''}`,
+    });
+    circle.append(createSvgElement('title', {}, `${player.name}, ${player.position}, rank ${player.rank}, value ${formatValue(player.value)}${player.drafted ? ', drafted' : ''}`));
+    circle.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        selectPlayer(player, { source: 'curve', restoreFocus: true });
+      }
+    });
+    pointGroup.append(circle);
+  }
+  elements.curveChart.append(pointGroup);
+
+  elements.curveChart.onclick = (event) => {
+    const bounds = elements.curveChart.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
+    const x = (event.clientX - bounds.left) * width / bounds.width;
+    const y = (event.clientY - bounds.top) * height / bounds.height;
+    const nearest = nearestCurvePoint(plotted, x, y, 26);
+    if (nearest) selectPlayer(nearest, { source: 'curve' });
+    else clearPlayerSelection();
+  };
+
+  const selectedPlayer = fullCurve.find((player) => playerSelectionKey(player) === state.selectedPlayerKey);
+  const selectedPoint = plotted.find((player) => playerSelectionKey(player) === state.selectedPlayerKey);
+  if (selectedPlayer) {
+    updateCurvePlayerDetails(selectedPlayer, { hiddenByFilter: !selectedPoint });
+    updateCurveCallout(selectedPoint);
+  } else {
+    updateCurvePlayerDetails();
+    updateCurveCallout();
+  }
 }
 
 function formatTimestamp(timestamp) {
@@ -205,8 +533,20 @@ async function loadPlayerValues() {
 }
 
 function buildPlayerRow(player) {
-  const row = createElement('tr', `player-row${player.drafted ? ' drafted' : ''}`);
-  row.dataset.playerKey = player.playerKey || player.modelKey || player.sleeperId || '';
+  const key = playerSelectionKey(player);
+  const selected = key && key === state.selectedPlayerKey;
+  const row = createElement('tr', `player-row${player.drafted ? ' drafted' : ''}${selected ? ' selected' : ''}`);
+  row.dataset.playerKey = key;
+  row.tabIndex = 0;
+  row.setAttribute('aria-selected', String(Boolean(selected)));
+  row.setAttribute('aria-label', `${player.name}, ${player.position}, value ${formatValue(player.beerPlus)}, dynasty rank ${formatDynastyRank(player.fantasyProsDynastyEcr2026)}${player.drafted ? ', drafted' : ''}`);
+  row.addEventListener('click', () => selectPlayer(player, { source: 'table' }));
+  row.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectPlayer(player, { source: 'table', restoreFocus: true });
+    }
+  });
 
   const identityCell = createElement('td', 'player-column');
   const identity = createElement('div', 'player-identity');
@@ -289,6 +629,7 @@ function renderRoster() {
   elements.rosterExtrasList.replaceChildren(extrasFragment);
   elements.rosterExtras.hidden = roster.extras.length === 0;
   renderNextPick(selection);
+  renderValueCurve();
 }
 
 function renderNextPick(selection = resolveTeamSelection(state.teamSelectionValue, state.users, state.draft ?? {})) {
@@ -451,6 +792,7 @@ function resetDraftRuntime() {
   state.picksSignature = '';
   state.pickedPlayerKeys = new Set();
   state.pickSource = 'none';
+  state.showDeeperPlayers = false;
   state.teamSelectionValue = '';
   state.teamSelectionDraftId = '';
   state.lastRefreshAt = 0;
@@ -858,6 +1200,23 @@ function bindEvents() {
       elements.accountInput.focus();
     }
   });
+  for (const button of elements.workspaceViewButtons) {
+    button.addEventListener('click', () => setWorkspaceView(button.dataset.workspaceView));
+  }
+  for (const button of elements.curvePositionButtons) {
+    button.addEventListener('click', () => {
+      state.curvePosition = CURVE_POSITIONS.has(button.dataset.curvePosition)
+        ? button.dataset.curvePosition
+        : 'ALL';
+      syncCurvePositionTabs();
+      renderValueCurve();
+    });
+  }
+  elements.curveDepthToggle.addEventListener('click', () => {
+    state.showDeeperPlayers = !state.showDeeperPlayers;
+    syncCurveDepthToggle();
+    renderValueCurve();
+  });
   elements.search.addEventListener('input', () => {
     state.filters.search = elements.search.value;
     renderPlayers();
@@ -888,15 +1247,22 @@ function bindEvents() {
   }
   for (const button of elements.mobileViewButtons) {
     button.addEventListener('click', () => {
-      document.body.dataset.mobileView = button.dataset.view;
-      for (const tab of elements.mobileViewButtons) {
-        const active = tab === button;
-        tab.classList.toggle('active', active);
-        tab.setAttribute('aria-pressed', String(active));
-      }
+      setMobileView(button.dataset.view);
       window.scrollTo({ top: 0, behavior: 'auto' });
+      if (button.dataset.view === 'players' && state.workspaceView === 'curves') renderValueCurve();
     });
   }
+  window.addEventListener('resize', () => {
+    if (state.workspaceView !== 'curves' || elements.curvePanel.hidden) return;
+    if (state.curveResizeFrame) window.cancelAnimationFrame(state.curveResizeFrame);
+    state.curveResizeFrame = window.requestAnimationFrame(() => {
+      state.curveResizeFrame = null;
+      renderValueCurve();
+    });
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.selectedPlayerKey) clearPlayerSelection();
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       stopPolling();
@@ -929,7 +1295,9 @@ async function initialize() {
     storageSet(localStorage, STORAGE.sortDirection, state.filters.sortDirection);
   }
   updateSortHeaders();
-  elements.showDrafted.checked = state.filters.showDrafted;
+  syncTableControls();
+  syncCurvePositionTabs();
+  syncCurveDepthToggle();
   const savedAccountInput = storageGet(localStorage, STORAGE.accountInput);
   const savedManualDraftId = storageGet(
     localStorage,

@@ -24,6 +24,9 @@ test('renders a compact semantic player table with three sortable columns', asyn
   assert.match(app, /createElement\('td', 'numeric-column value-number'/);
   assert.match(app, /'numeric-column dynasty-number'/);
   assert.match(app, /header\?\.setAttribute\('aria-sort'/);
+  assert.match(app, /row\.tabIndex = 0/);
+  assert.match(app, /row\.setAttribute\('aria-selected'/);
+  assert.match(app, /selectPlayer\(player, \{ source: 'table' \}\)/);
   assert.doesNotMatch(app, /createElement\('details'|value-track|expand-indicator|Lower is better/);
 });
 

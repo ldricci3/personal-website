@@ -93,6 +93,11 @@
         <p id="setup-error" class="setup-error" role="alert" hidden></p>
       </details>
 
+      <nav class="workspace-view-tabs" aria-label="Player data view">
+        <button type="button" class="active" data-workspace-view="table" aria-pressed="true">Players</button>
+        <button type="button" data-workspace-view="curves" aria-pressed="false">Value curves</button>
+      </nav>
+
       <nav class="mobile-view-switch" aria-label="Draft guide view">
         <button type="button" class="active" data-view="players" aria-pressed="true">Players</button>
         <button type="button" data-view="roster" aria-pressed="false">My roster <span id="mobile-roster-count">0</span></button>
@@ -143,6 +148,42 @@
         </div>
         <p id="empty-state" class="empty-state" hidden>No players match these filters.</p>
       </div>
+
+      <section id="curve-panel" class="curve-panel" aria-labelledby="curve-title" hidden>
+        <div class="curve-heading">
+          <div>
+            <p class="eyebrow">Value by overall rank</p>
+            <h2 id="curve-title">Value curves</h2>
+          </div>
+          <div class="curve-legend" aria-label="Chart legend">
+            <span><i class="available-key" aria-hidden="true"></i>Available</span>
+            <span><i class="drafted-key" aria-hidden="true"></i>Drafted</span>
+            <span><i class="pick-key" aria-hidden="true"></i>Your picks</span>
+          </div>
+        </div>
+
+        <div class="curve-controls">
+          <div class="curve-position-tabs" role="group" aria-label="Value curve position">
+            <button type="button" class="active" data-curve-position="ALL" aria-pressed="true">All</button>
+            <button type="button" data-curve-position="QB" aria-pressed="false">QB</button>
+            <button type="button" data-curve-position="RB" aria-pressed="false">RB</button>
+            <button type="button" data-curve-position="WR" aria-pressed="false">WR</button>
+            <button type="button" data-curve-position="TE" aria-pressed="false">TE</button>
+          </div>
+          <button id="curve-depth-toggle" class="curve-depth-toggle" type="button" aria-pressed="false" aria-describedby="curve-depth-note">Show deeper players</button>
+        </div>
+        <p id="curve-depth-note" class="curve-depth-note">Showing players through the 12-team, 15-round fallback (180).</p>
+
+        <figure class="value-curve-figure">
+          <svg id="value-curve-chart" class="value-curve-chart" role="img" aria-labelledby="curve-title curve-description"></svg>
+          <figcaption id="curve-description">Straight segments connect the discrete player rankings. Tap any point for details.</figcaption>
+        </figure>
+        <p id="curve-pick-note" class="curve-pick-note">Choose your team or draft slot to mark your picks.</p>
+        <div id="curve-player-details" class="curve-player-details" aria-live="polite">
+          <strong>Select a player</strong>
+          <span>Tap a point or player row for details.</span>
+        </div>
+      </section>
     </section>
 
     <aside class="roster-panel" aria-label="My roster">
