@@ -105,15 +105,6 @@
             <span class="sr-only">Search players</span>
             <input id="player-search" type="search" autocomplete="off" placeholder="Search player or team">
           </label>
-
-          <label class="sort-control" for="sort-by">
-            <span>Sort</span>
-            <select id="sort-by">
-              <option value="rank">Overall rank</option>
-              <option value="beer">Current BEER+</option>
-              <option value="dynasty">Dynasty rank</option>
-            </select>
-          </label>
         </div>
 
         <div class="filter-row">
@@ -131,16 +122,25 @@
           </label>
         </div>
 
-        <div class="value-legend" aria-label="Player value legend">
-          <span><i class="legend-current"></i>Current BEER+</span>
-          <span><i class="legend-future"></i>Dynasty rank</span>
-          <button id="value-help" class="text-button" type="button" aria-expanded="false" aria-controls="value-help-copy">How values work</button>
+        <div class="player-table-wrap">
+          <table id="player-table" class="player-table">
+            <caption class="sr-only">Available fantasy football players</caption>
+            <thead>
+              <tr>
+                <th class="player-column" scope="col" aria-sort="none">
+                  <button type="button" data-sort="player" aria-label="Sort by player name">Player<span class="sort-indicator" aria-hidden="true"></span></button>
+                </th>
+                <th class="numeric-column" scope="col" aria-sort="descending">
+                  <button type="button" data-sort="beer" aria-label="Sort by current BEER+ value" title="Current BEER+ value">Value<span class="sort-indicator" aria-hidden="true">↓</span></button>
+                </th>
+                <th class="numeric-column" scope="col" aria-sort="none">
+                  <button type="button" data-sort="dynasty" aria-label="Sort by dynasty rank; lower is better" title="FantasyPros dynasty rank; lower is better">Dynasty<span class="sort-indicator" aria-hidden="true"></span></button>
+                </th>
+              </tr>
+            </thead>
+            <tbody id="player-list" aria-busy="true"></tbody>
+          </table>
         </div>
-        <p id="value-help-copy" class="value-help-copy" hidden>
-          Current BEER+ measures 2026 draft value. FantasyPros consensus dynasty rank is the separate future-value proxy, and a lower rank is better. Expand a player to compare that rank directly with the possible Round 3 and Round 4 keeper costs; no future-season forecast or simulation is used.
-        </p>
-
-        <div id="player-list" class="player-list" aria-busy="true"></div>
         <p id="empty-state" class="empty-state" hidden>No players match these filters.</p>
       </div>
     </section>
@@ -164,9 +164,9 @@
   </main>
 
   <template id="loading-row-template">
-    <div class="player-card loading-row" aria-hidden="true">
-      <span></span><span></span><span></span>
-    </div>
+    <tr class="loading-row" aria-hidden="true">
+      <td><span></span></td><td><span></span></td><td><span></span></td>
+    </tr>
   </template>
 
   <script type="module" src="app.js"></script>

@@ -25,12 +25,12 @@ const TEAM_ALIASES = Object.freeze({
   WSH: 'WAS',
 });
 
-const SORTERS = Object.freeze({
-  rank: (a, b) => numeric(a.overallRank, Number.MAX_SAFE_INTEGER) - numeric(b.overallRank, Number.MAX_SAFE_INTEGER),
-  beer: (a, b) => numeric(b.beerPlus) - numeric(a.beerPlus),
-  dynasty: (a, b) => numeric(a.fantasyProsDynastyEcr2026, Number.MAX_SAFE_INTEGER)
-    - numeric(b.fantasyProsDynastyEcr2026, Number.MAX_SAFE_INTEGER),
+const SORT_FIELDS = Object.freeze({
+  rank: 'overallRank',
+  beer: 'beerPlus',
+  dynasty: 'fantasyProsDynastyEcr2026',
 });
+const SORT_KEYS = new Set(['player', ...Object.keys(SORT_FIELDS)]);
 
 function numeric(value, fallback = 0) {
   if (value === null || value === undefined || value === '') return fallback;
@@ -234,15 +234,59 @@ export function getPickedPlayerKeys(players, picks) {
   return picked;
 }
 
+export function defaultSortDirection(sortBy = 'beer') {
+  return sortBy === 'beer' ? 'desc' : 'asc';
+}
+
+export function nextSortState(current = {}, requestedSortBy = 'beer') {
+  const sortBy = SORT_KEYS.has(requestedSortBy) ? requestedSortBy : 'beer';
+  const currentSortBy = SORT_KEYS.has(current.sortBy) ? current.sortBy : 'beer';
+  const currentDirection = current.sortDirection === 'asc' || current.sortDirection === 'desc'
+    ? current.sortDirection
+    : defaultSortDirection(currentSortBy);
+  return {
+    sortBy,
+    sortDirection: sortBy === currentSortBy
+      ? (currentDirection === 'asc' ? 'desc' : 'asc')
+      : defaultSortDirection(sortBy),
+  };
+}
+
+function numericSortValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function comparePlayers(a, b, sortBy, sortDirection) {
+  const direction = sortDirection === 'desc' ? -1 : 1;
+  if (sortBy === 'player') {
+    return String(a.name ?? '').localeCompare(String(b.name ?? ''), undefined, { sensitivity: 'base' }) * direction;
+  }
+
+  const field = SORT_FIELDS[sortBy] ?? SORT_FIELDS.beer;
+  const left = numericSortValue(a[field]);
+  const right = numericSortValue(b[field]);
+  if (left === null && right !== null) return 1;
+  if (right === null && left !== null) return -1;
+  if (left !== null && right !== null && left !== right) return (left - right) * direction;
+  return 0;
+}
+
 export function filterAndSortPlayers(players, options = {}) {
   const {
     search = '',
     position = 'ALL',
-    sortBy = 'rank',
+    sortBy: requestedSortBy = 'beer',
+    sortDirection: requestedDirection,
     showDrafted = false,
     picks = [],
     pickedKeys: suppliedPickedKeys = null,
   } = options;
+  const sortBy = SORT_KEYS.has(requestedSortBy) ? requestedSortBy : 'beer';
+  const sortDirection = requestedDirection === 'asc' || requestedDirection === 'desc'
+    ? requestedDirection
+    : defaultSortDirection(sortBy);
   const query = normalizeName(search);
   const pickedKeys = suppliedPickedKeys instanceof Set ? suppliedPickedKeys : getPickedPlayerKeys(players, picks);
 
@@ -251,10 +295,9 @@ export function filterAndSortPlayers(players, options = {}) {
     .filter((player) => !query || normalizeName(`${player.name} ${player.team} ${player.position}`).includes(query))
     .map((player) => ({ ...player, drafted: pickedKeys.has(playerKey(player)) }))
     .filter((player) => showDrafted || !player.drafted)
-    .sort((a, b) => {
-      const primary = (SORTERS[sortBy] ?? SORTERS.rank)(a, b);
-      return primary || SORTERS.rank(a, b) || String(a.name).localeCompare(String(b.name));
-    });
+    .sort((a, b) => comparePlayers(a, b, sortBy, sortDirection)
+      || numeric(a.overallRank, Number.MAX_SAFE_INTEGER) - numeric(b.overallRank, Number.MAX_SAFE_INTEGER)
+      || String(a.name).localeCompare(String(b.name)));
 }
 
 export function playerFromPick(pick, playerIndex = new Map(), players = []) {

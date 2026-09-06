@@ -5,6 +5,7 @@ import {
   buildTeamOptions,
   chooseInitialConnection,
   createContextGate,
+  defaultSortDirection,
   draftPicksSignature,
   filterAndSortPlayers,
   freshSleeperPath,
@@ -15,6 +16,7 @@ import {
   leagueDraftStorageKey,
   loadCachedPicks,
   nextPickStatus,
+  nextSortState,
   normalizeDraftPicks,
   normalizeSleeperAccount,
   normalizeSleeperAccountInput,
@@ -43,12 +45,12 @@ const STORAGE = Object.freeze({
   teamSelection: 'fantasyDraft.teamSelection',
   showDrafted: 'fantasyDraft.showDrafted',
   sortBy: 'fantasyDraft.sortBy',
+  sortDirection: 'fantasyDraft.sortDirection',
 });
 const contextGate = createContextGate();
 
 const state = {
   players: [],
-  metadata: {},
   picks: [],
   picksSignature: '',
   pickedPlayerKeys: new Set(),
@@ -68,7 +70,8 @@ const state = {
   filters: {
     search: '',
     position: 'ALL',
-    sortBy: storageGet(localStorage, STORAGE.sortBy, 'rank'),
+    sortBy: storageGet(localStorage, STORAGE.sortBy, 'beer'),
+    sortDirection: storageGet(localStorage, STORAGE.sortDirection),
     showDrafted: storageGet(localStorage, STORAGE.showDrafted) === 'true',
   },
   pollTimer: null,
@@ -79,7 +82,6 @@ const state = {
   refreshRequestId: 0,
   contextToken: 0,
   lastRefreshAt: 0,
-  maxBeer: 1,
 };
 
 const elements = {
@@ -101,7 +103,7 @@ const elements = {
   draftedCount: document.querySelector('#drafted-count'),
   nextPickStatus: document.querySelector('#next-pick-status'),
   search: document.querySelector('#player-search'),
-  sortBy: document.querySelector('#sort-by'),
+  sortButtons: [...document.querySelectorAll('[data-sort]')],
   showDrafted: document.querySelector('#show-drafted'),
   positionTabs: [...document.querySelectorAll('[data-position]')],
   playerList: document.querySelector('#player-list'),
@@ -114,8 +116,6 @@ const elements = {
   rosterExtras: document.querySelector('#roster-extras'),
   rosterExtrasList: document.querySelector('#roster-extras-list'),
   mobileViewButtons: [...document.querySelectorAll('[data-view]')],
-  valueHelp: document.querySelector('#value-help'),
-  valueHelpCopy: document.querySelector('#value-help-copy'),
 };
 
 function createElement(tag, className, text) {
@@ -125,39 +125,16 @@ function createElement(tag, className, text) {
   return element;
 }
 
-function asNumber(value, fallback = 0) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-}
-
 function formatValue(value, digits = 2) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
   return number.toFixed(digits).replace(/\.00$/, '');
 }
 
-function formatRank(value) {
+function formatDynastyRank(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
-  const display = Number.isInteger(number) ? String(number) : number.toFixed(1);
-  return `#${display}`;
-}
-
-function formatSignedRankEdge(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return '—';
-  const rounded = Math.round(number * 10) / 10;
-  return `${rounded > 0 ? '+' : ''}${rounded}`;
-}
-
-function formatRankEdgeRange(minimum, maximum) {
-  return `${formatSignedRankEdge(minimum)} to ${formatSignedRankEdge(maximum)} slots`;
-}
-
-function comparisonLabel(comparison) {
-  if (comparison === 'aheadOfRound') return 'Ahead of the full round';
-  if (comparison === 'withinRound') return 'Depends on draft slot';
-  return 'Behind the full round';
+  return Number.isInteger(number) ? String(number) : number.toFixed(1);
 }
 
 function formatTimestamp(timestamp) {
@@ -223,109 +200,58 @@ async function loadPlayerValues() {
   const payload = await response.json();
   if (!Array.isArray(payload.players)) throw new Error('Player value data is invalid.');
   state.players = payload.players;
-  state.metadata = payload.metadata ?? {};
-  state.maxBeer = Math.max(1, ...state.players.map((player) => asNumber(player.beerPlus)));
   renderPlayers();
   renderRoster();
 }
 
-function appendValueCell(parent, label, value, maxValue, future = false) {
-  const cell = createElement('div', `value-cell${future ? ' future' : ''}`);
-  const valueLabel = createElement('div', 'value-label');
-  valueLabel.append(createElement('span', '', label), createElement('strong', '', formatValue(value)));
-  const track = createElement('div', 'value-track');
-  const fill = createElement('span', 'value-fill');
-  const percent = Math.max(0, Math.min(100, (asNumber(value) / maxValue) * 100));
-  fill.style.width = `${percent.toFixed(1)}%`;
-  track.append(fill);
-  cell.append(valueLabel, track);
-  parent.append(cell);
-}
+function buildPlayerRow(player) {
+  const row = createElement('tr', `player-row${player.drafted ? ' drafted' : ''}`);
+  row.dataset.playerKey = player.playerKey || player.modelKey || player.sleeperId || '';
 
-function appendRankCell(parent, label, rank) {
-  const cell = createElement('div', 'value-cell future rank-cell');
-  const valueLabel = createElement('div', 'value-label');
-  valueLabel.append(createElement('span', '', label), createElement('strong', '', formatRank(rank)));
-  cell.append(valueLabel, createElement('span', 'rank-source', 'Lower is better'));
-  parent.append(cell);
-}
-
-function appendDetailRow(parent, label, value) {
-  const row = createElement('div', 'detail-row');
-  row.append(createElement('span', '', label), createElement('strong', '', value));
-  parent.append(row);
-}
-
-function buildPlayerCard(player) {
-  const details = createElement('details', `player-card${player.drafted ? ' drafted' : ''}`);
-  details.dataset.playerKey = player.playerKey || player.modelKey || player.sleeperId || '';
-  const summary = createElement('summary');
-  summary.append(createElement('span', 'rank-number', player.overallRank));
-
+  const identityCell = createElement('td', 'player-column');
   const identity = createElement('div', 'player-identity');
   identity.append(createElement('span', 'player-name', player.name));
   const meta = createElement('span', 'player-meta');
-  meta.append(createElement('span', 'position-pill', player.position));
-  meta.append(document.createTextNode(player.team ? ` ${player.team}` : ''));
+  meta.append(createElement('span', 'player-position', player.position));
+  if (player.team) meta.append(document.createTextNode(` · ${player.team}`));
   if (player.drafted) meta.append(createElement('span', 'drafted-badge', ' · Drafted'));
   identity.append(meta);
-  summary.append(identity);
+  identityCell.append(identity);
 
-  appendValueCell(summary, 'Now', player.beerPlus, state.maxBeer);
-  appendRankCell(summary, 'Dynasty', player.fantasyProsDynastyEcr2026);
-  summary.append(createElement('span', 'expand-indicator'));
-  details.append(summary);
+  const valueCell = createElement('td', 'numeric-column value-number', formatValue(player.beerPlus));
+  const dynastyCell = createElement(
+    'td',
+    'numeric-column dynasty-number',
+    formatDynastyRank(player.fantasyProsDynastyEcr2026),
+  );
+  row.append(identityCell, valueCell, dynastyCell);
+  return row;
+}
 
-  const detailGrid = createElement('div', 'player-details');
-  const current = createElement('section', 'detail-card');
-  current.append(createElement('h3', '', 'Current draft'));
-  appendDetailRow(current, 'BEER+', formatValue(player.beerPlus));
-  appendDetailRow(current, 'Board rank', formatRank(player.overallRank));
-
-  const dynasty = createElement('section', 'detail-card');
-  dynasty.append(createElement('h3', '', 'Future proxy'));
-  appendDetailRow(dynasty, 'Dynasty ECR', formatRank(player.fantasyProsDynastyEcr2026));
-  appendDetailRow(dynasty, 'Source snapshot', state.metadata?.sources?.dynastyRanking?.snapshotDate ?? '—');
-
-  const roundThree = createElement('section', 'detail-card');
-  roundThree.append(createElement('h3', '', 'Round 3 keeper'));
-  appendDetailRow(roundThree, 'Pick cost', '#25–36');
-  appendDetailRow(roundThree, 'Rank edge', formatRankEdgeRange(player.keeperRound3RankEdgeMin, player.keeperRound3RankEdgeMax));
-  appendDetailRow(roundThree, 'Comparison', comparisonLabel(player.keeperRound3Comparison));
-
-  const roundFour = createElement('section', 'detail-card');
-  roundFour.append(createElement('h3', '', 'Round 4 keeper'));
-  appendDetailRow(roundFour, 'Pick cost', '#37–48');
-  appendDetailRow(roundFour, 'Rank edge', formatRankEdgeRange(player.keeperRound4RankEdgeMin, player.keeperRound4RankEdgeMax));
-  appendDetailRow(roundFour, 'Comparison', comparisonLabel(player.keeperRound4Comparison));
-
-  detailGrid.append(current, dynasty, roundThree, roundFour);
-  detailGrid.append(createElement('p', 'confidence-note', 'Positive rank edge means the dynasty rank is earlier than the forfeited pick. Keeper eligibility still depends on the player actually being drafted after Round 2.'));
-  details.append(detailGrid);
-  return details;
+function updateSortHeaders() {
+  for (const button of elements.sortButtons) {
+    const active = button.dataset.sort === state.filters.sortBy;
+    const direction = active ? state.filters.sortDirection : '';
+    const header = button.closest('th');
+    const indicator = button.querySelector('.sort-indicator');
+    header?.setAttribute('aria-sort', active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none');
+    button.classList.toggle('active', active);
+    if (indicator) indicator.textContent = active ? (direction === 'asc' ? '↑' : '↓') : '';
+  }
 }
 
 function renderPlayers() {
   if (!state.players.length) return;
-  const openKeys = new Set(
-    [...elements.playerList.querySelectorAll('.player-card[open]')].map((card) => card.dataset.playerKey),
-  );
-  const focusedCard = document.activeElement?.closest?.('.player-card');
-  const focusedKey = focusedCard?.dataset.playerKey || '';
   const players = filterAndSortPlayers(state.players, {
     ...state.filters,
     pickedKeys: state.pickedPlayerKeys,
   });
   const fragment = document.createDocumentFragment();
-  for (const player of players) fragment.append(buildPlayerCard(player));
+  for (const player of players) fragment.append(buildPlayerRow(player));
   elements.playerList.replaceChildren(fragment);
   elements.playerList.setAttribute('aria-busy', 'false');
   elements.emptyState.hidden = players.length > 0;
-
-  for (const card of elements.playerList.querySelectorAll('.player-card')) {
-    if (openKeys.has(card.dataset.playerKey)) card.open = true;
-    if (focusedKey && card.dataset.playerKey === focusedKey) card.querySelector('summary')?.focus({ preventScroll: true });
-  }
+  updateSortHeaders();
 }
 
 function renderRosterPlayer(slot, player) {
@@ -936,11 +862,14 @@ function bindEvents() {
     state.filters.search = elements.search.value;
     renderPlayers();
   });
-  elements.sortBy.addEventListener('change', () => {
-    state.filters.sortBy = elements.sortBy.value;
-    storageSet(localStorage, STORAGE.sortBy, state.filters.sortBy);
-    renderPlayers();
-  });
+  for (const button of elements.sortButtons) {
+    button.addEventListener('click', () => {
+      Object.assign(state.filters, nextSortState(state.filters, button.dataset.sort));
+      storageSet(localStorage, STORAGE.sortBy, state.filters.sortBy);
+      storageSet(localStorage, STORAGE.sortDirection, state.filters.sortDirection);
+      renderPlayers();
+    });
+  }
   elements.showDrafted.addEventListener('change', () => {
     state.filters.showDrafted = elements.showDrafted.checked;
     storageSet(localStorage, STORAGE.showDrafted, state.filters.showDrafted);
@@ -968,11 +897,6 @@ function bindEvents() {
       window.scrollTo({ top: 0, behavior: 'auto' });
     });
   }
-  elements.valueHelp.addEventListener('click', () => {
-    const expanded = elements.valueHelp.getAttribute('aria-expanded') === 'true';
-    elements.valueHelp.setAttribute('aria-expanded', String(!expanded));
-    elements.valueHelpCopy.hidden = expanded;
-  });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       stopPolling();
@@ -994,12 +918,17 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
-  const availableSorts = new Set([...elements.sortBy.options].map((option) => option.value));
+  const availableSorts = new Set(elements.sortButtons.map((button) => button.dataset.sort));
   if (!availableSorts.has(state.filters.sortBy)) {
-    state.filters.sortBy = 'rank';
+    state.filters.sortBy = 'beer';
+    state.filters.sortDirection = defaultSortDirection(state.filters.sortBy);
     storageSet(localStorage, STORAGE.sortBy, state.filters.sortBy);
+    storageSet(localStorage, STORAGE.sortDirection, state.filters.sortDirection);
+  } else if (!['asc', 'desc'].includes(state.filters.sortDirection)) {
+    state.filters.sortDirection = defaultSortDirection(state.filters.sortBy);
+    storageSet(localStorage, STORAGE.sortDirection, state.filters.sortDirection);
   }
-  elements.sortBy.value = state.filters.sortBy;
+  updateSortHeaders();
   elements.showDrafted.checked = state.filters.showDrafted;
   const savedAccountInput = storageGet(localStorage, STORAGE.accountInput);
   const savedManualDraftId = storageGet(
