@@ -2,21 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   accountLeagueStorageKey,
-  accountMockStorageKey,
   assignRosterSlots,
   buildTeamOptions,
   chooseInitialConnection,
   createContextGate,
   draftPicksSignature,
   filterAndSortPlayers,
+  freshSleeperPath,
   getPickedPlayerKeys,
+  isStandaloneDraft,
   isValidDraftPick,
   isValidSleeperAccountInput,
   isValidSleeperId,
   leagueDraftStorageKey,
   loadCachedPicks,
   nextPickStatus,
-  normalizeActiveStandaloneMocks,
   normalizeDraftPicks,
   normalizeName,
   normalizePosition,
@@ -30,15 +30,20 @@ import {
   pickNumberForRound,
   resolveTeamSelection,
   saveCachedPicks,
-  selectActiveMockId,
   selectDraftId,
   selectLeagueId,
-  selectNewActiveMockId,
   storageGet,
   storageRemove,
   storageSet,
 } from '../site/fantasy/draft-core.js';
-import { draft, picks, players, users } from './fixtures/draft-fixtures.mjs';
+import {
+  accountDraftsWithoutStandaloneMock,
+  draft,
+  picks,
+  players,
+  standaloneLeagueMock,
+  users,
+} from './fixtures/draft-fixtures.mjs';
 
 function memoryStorage() {
   const values = new Map();
@@ -115,59 +120,40 @@ test('normalizes multiple drafts and rejects invalid draft payloads', () => {
   assert.throws(() => normalizeSleeperDrafts({}), /invalid draft data/i);
 });
 
-test('finds only active standalone 2026 NFL mocks and sorts them by recent activity', () => {
-  const mocks = normalizeActiveStandaloneMocks([
-    { draft_id: '101', status: 'drafting', league_id: null, sport: 'nfl', season: '2026', start_time: 100 },
-    { draft_id: '102', status: 'drafting', league_id: '', sport: 'nfl', season: '2026', last_picked: 300 },
-    { draft_id: '103', status: 'drafting', sport: 'nfl', season: '2026', created: 200, metadata: { name: 'Primary League' } },
-    { draft_id: '104', status: 'drafting', league_id: '900', sport: 'nfl', season: '2026' },
-    { draft_id: '105', status: 'drafting', league_id: 'malformed', sport: 'nfl', season: '2026' },
-    { draft_id: '106', status: 'pre_draft', league_id: null, sport: 'nfl', season: '2026' },
-    { draft_id: '107', status: 'complete', league_id: null, sport: 'nfl', season: '2026' },
-    { draft_id: '108', status: 'drafting', league_id: null, sport: 'nba', season: '2026' },
-    { draft_id: '109', status: 'drafting', league_id: null, sport: 'nfl', season: '2025' },
-  ]);
-  assert.deepEqual(mocks.map((draft) => draft.draft_id), ['102', '103', '101']);
-  assert.equal(mocks[1].metadata.name, 'Primary League');
-  assert.throws(() => normalizeActiveStandaloneMocks({ drafts: [] }), /invalid draft data/i);
+test('models the real account response that omits an active standalone mock', () => {
+  const accountDrafts = normalizeSleeperDrafts(accountDraftsWithoutStandaloneMock);
+  assert.equal(accountDrafts.some((item) => item.draft_id === standaloneLeagueMock.draft_id), false);
+
+  const [directMock] = normalizeSleeperDrafts([standaloneLeagueMock]);
+  assert.equal(isStandaloneDraft(directMock), true);
+  assert.equal(directMock.metadata.type, 'league_mock');
+  assert.equal(directMock.metadata.league_id, '1389358867208470528');
+  assert.equal(directMock.status, 'drafting');
+  assert.equal(isStandaloneDraft({ ...directMock, league_id: directMock.metadata.league_id }), false);
 });
 
-test('selects one active mock without guessing when multiple mocks appear', () => {
-  const oneMock = [{ draft_id: '101', status: 'drafting' }];
-  const twoMocks = [...oneMock, { draft_id: '102', status: 'drafting' }];
-  assert.equal(selectActiveMockId(oneMock), '101');
-  assert.equal(selectActiveMockId(twoMocks), '');
-  assert.equal(selectActiveMockId(twoMocks, '102'), '102');
-  assert.equal(selectActiveMockId(oneMock, 'stale'), '101');
-  assert.equal(selectNewActiveMockId(oneMock, [], null), '101');
-  assert.equal(selectNewActiveMockId(twoMocks, [], null), '');
-  assert.equal(selectNewActiveMockId(twoMocks, ['101'], null), '102');
-  assert.equal(selectNewActiveMockId(oneMock, ['101'], null), '');
-  assert.equal(selectNewActiveMockId(oneMock, [], { draft_id: '999', status: 'drafting' }), '');
+test('adds a unique cache-buster to live Sleeper requests', () => {
+  const path = '/draft/1402187277609803776/picks';
+  assert.equal(freshSleeperPath(path), path);
+  assert.equal(freshSleeperPath(path, 1788702265240), `${path}?_=1788702265240`);
+  assert.equal(freshSleeperPath(`${path}?source=manual`, 'pick 36'), `${path}?source=manual&_=pick%2036`);
 });
 
-test('scopes saved league, league draft, and active mock choices so accounts cannot mix', () => {
+test('scopes saved league and league draft choices so accounts cannot mix', () => {
   const storage = memoryStorage();
   const accountOneLeagueKey = accountLeagueStorageKey('111');
   const accountTwoLeagueKey = accountLeagueStorageKey('222');
-  const accountOneMockKey = accountMockStorageKey('111');
-  const accountTwoMockKey = accountMockStorageKey('222');
   const leagueOneDraftKey = leagueDraftStorageKey('333');
   const leagueTwoDraftKey = leagueDraftStorageKey('444');
   storageSet(storage, accountOneLeagueKey, '333');
   storageSet(storage, accountTwoLeagueKey, '444');
-  storageSet(storage, accountOneMockKey, '777');
-  storageSet(storage, accountTwoMockKey, '888');
   storageSet(storage, leagueOneDraftKey, '555');
   storageSet(storage, leagueTwoDraftKey, '666');
   assert.equal(storageGet(storage, accountOneLeagueKey), '333');
   assert.equal(storageGet(storage, accountTwoLeagueKey), '444');
-  assert.equal(storageGet(storage, accountOneMockKey), '777');
-  assert.equal(storageGet(storage, accountTwoMockKey), '888');
   assert.equal(storageGet(storage, leagueOneDraftKey), '555');
   assert.equal(storageGet(storage, leagueTwoDraftKey), '666');
   assert.equal(accountLeagueStorageKey('bad-id'), '');
-  assert.equal(accountMockStorageKey('bad-id'), '');
   assert.equal(leagueDraftStorageKey('bad-id'), '');
 });
 

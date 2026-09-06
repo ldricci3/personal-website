@@ -38,3 +38,38 @@ export const draft = {
   draft_order: { 'user-1': 1, 'user-2': 2 },
   slot_to_roster_id: { 1: 11, 2: 22, 3: 33, 4: 44 },
 };
+
+
+// Reduced copies of the live September 6, 2026 responses that exposed two
+// separate API behaviors: account drafts omit standalone mocks, while direct
+// draft lookup returns them normally.
+export const accountDraftsWithoutStandaloneMock = [
+  {
+    draft_id: '1399079538746503168',
+    league_id: '1399079538184421376',
+    season: '2026',
+    sport: 'nfl',
+    status: 'pre_draft',
+  },
+  {
+    draft_id: '1389358867212664832',
+    league_id: '1389358867208470528',
+    season: '2026',
+    sport: 'nfl',
+    status: 'pre_draft',
+  },
+];
+
+export const standaloneLeagueMock = {
+  draft_id: '1402187277609803776',
+  league_id: null,
+  metadata: {
+    league_id: '1389358867208470528',
+    name: 'DSig All Stars',
+    type: 'league_mock',
+  },
+  season: '2026',
+  sport: 'nfl',
+  status: 'drafting',
+  settings: { teams: 12, rounds: 15 },
+};
