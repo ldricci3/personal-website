@@ -109,8 +109,33 @@ export function normalizeSleeperDrafts(payload) {
     .map((draft) => ({ ...draft, draft_id: String(draft.draft_id) }));
 }
 
+function draftActivityTime(draft) {
+  for (const value of [draft?.last_picked, draft?.start_time, draft?.created]) {
+    const timestamp = numeric(value);
+    if (timestamp > 0) return timestamp;
+  }
+  return 0;
+}
+
+export function normalizeActiveStandaloneMocks(payload, season = '2026') {
+  const expectedSeason = String(season);
+  return normalizeSleeperDrafts(payload)
+    .filter((draft) => String(draft.status ?? '').toLowerCase() === 'drafting')
+    .filter((draft) => draft.league_id === undefined || draft.league_id === null || String(draft.league_id).trim() === '')
+    .filter((draft) => !draft.sport || String(draft.sport).toLowerCase() === 'nfl')
+    .filter((draft) => !draft.season || String(draft.season) === expectedSeason)
+    .sort((a, b) => {
+      const timeDifference = draftActivityTime(b) - draftActivityTime(a);
+      return timeDifference || String(b.draft_id).localeCompare(String(a.draft_id));
+    });
+}
+
 export function accountLeagueStorageKey(accountId) {
   return isValidSleeperId(accountId) ? `fantasyDraft.account.${accountId}.leagueId` : '';
+}
+
+export function accountMockStorageKey(accountId) {
+  return isValidSleeperId(accountId) ? `fantasyDraft.account.${accountId}.mockDraftId` : '';
 }
 
 export function leagueDraftStorageKey(leagueId) {
@@ -314,6 +339,23 @@ export function selectDraftId(drafts, savedDraftId = '') {
   if (upcoming) return String(upcoming.draft_id);
   if (savedDraft) return saved;
   return drafts[0] ? String(drafts[0].draft_id) : '';
+}
+
+export function selectActiveMockId(mocks, preferredDraftId = '') {
+  const preferred = String(preferredDraftId ?? '');
+  if (preferred && mocks.some((draft) => String(draft.draft_id) === preferred)) return preferred;
+  return mocks.length === 1 ? String(mocks[0].draft_id) : '';
+}
+
+export function selectNewActiveMockId(mocks, previousDraftIds = [], currentDraft = null) {
+  if (String(currentDraft?.status ?? '').toLowerCase() === 'drafting') return '';
+  const previous = new Set(previousDraftIds.map((draftId) => String(draftId)));
+  const currentDraftId = String(currentDraft?.draft_id ?? '');
+  const candidates = mocks.filter((draft) => {
+    const draftId = String(draft.draft_id);
+    return draftId !== currentDraftId && !previous.has(draftId);
+  });
+  return candidates.length === 1 ? String(candidates[0].draft_id) : '';
 }
 
 export function buildTeamOptions(users = [], draft = {}) {
