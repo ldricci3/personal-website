@@ -71,8 +71,16 @@
             </select>
           </div>
 
+          <div class="field-group">
+            <label for="mock-select">Active mock drafts</label>
+            <select id="mock-select" disabled>
+              <option value="">Find your account first</option>
+            </select>
+            <p class="field-help">Live standalone mocks from your account. Sleeper does not tie them back to a league.</p>
+          </div>
+
           <div class="field-group direct-draft-field">
-            <label for="manual-draft-id">Draft ID <span>for standalone mocks</span></label>
+            <label for="manual-draft-id">Draft ID <span>manual fallback</span></label>
             <div class="input-action">
               <input id="manual-draft-id" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Enter mock draft ID">
               <button id="load-manual-draft" class="button secondary" type="button">Open mock</button>

@@ -27,7 +27,7 @@ The draft guide uses browser ES modules and Node's built-in test runner, with no
 npm test
 ```
 
-The tests cover account and league discovery, stale-response rejection, context-scoped persistence, standalone mock fallback, player filtering and sorting, drafted-player exclusion, name fallback matching, roster-slot assignment, user/slot and draft selection, snake-draft pick calculations, ID validation, local preference/cache behavior, and the complete static player dataset.
+The tests cover account, league, and active standalone-mock discovery; multi-mock selection; stale-response rejection; context-scoped persistence; manual draft-ID fallback; player filtering and sorting; drafted-player exclusion; name fallback matching; roster-slot assignment; user/slot and draft selection; snake-draft pick calculations; ID validation; local preference/cache behavior; and the complete static player dataset.
 
 ## Player-value data
 
@@ -51,15 +51,18 @@ The draft guide uses Sleeper's documented, public, read-only API at `https://api
 
 - `GET /user/{username_or_user_id}`
 - `GET /user/{user_id}/leagues/nfl/2026`
+- `GET /user/{user_id}/drafts/nfl/2026`
 - `GET /league/{league_id}`
 - `GET /league/{league_id}/users`
 - `GET /league/{league_id}/drafts`
 - `GET /draft/{draft_id}`
 - `GET /draft/{draft_id}/picks`
 
-The user enters a Sleeper username or numeric user ID. The guide lists that account's 2026 NFL leagues by name, then automatically opens the active or pre-draft draft for the selected league. Account, league, draft, team/slot choice, sort preference, and the show-drafted preference are stored only in the browser's local storage. The last successful account or standalone-mock mode is restored on reload. League choices are scoped per account, draft choices per league, and team choices per draft so saved state cannot leak across contexts. A separate direct draft-ID field remains available for standalone mocks that are not returned by a league.
+The user enters a Sleeper username or numeric user ID. The guide lists that account's 2026 NFL leagues by name and separately lists active standalone mocks returned for the account. A single active mock opens automatically unless a real league draft is already live. When several active mocks exist, the guide labels each with its name, start time, team count, and draft-ID suffix and waits for the user to choose instead of guessing. Sleeper does not report a league association for those mocks, so the guide never infers one from copied settings or metadata. The selected league and its official draft list remain available while a mock is open.
 
-Every Sleeper request has an eight-second timeout. While a draft is open and the page is visible, picks refresh about every five seconds. Polling stops when the page is hidden and refreshes when it becomes visible or focused. The last successful pick state is cached locally so a temporary connection failure does not empty the board. The page displays whether data is live, cached, stale, or unavailable.
+Account, league, league-draft, active-mock, team/slot, sort, and show-drafted choices are stored only in the browser's local storage. League and mock choices are scoped per account, league drafts per league, and team choices per draft so saved state cannot leak across contexts. A separate direct draft-ID field remains available as a manual fallback.
+
+Every Sleeper request has an eight-second timeout. While a draft is open and the page is visible, picks refresh about every five seconds. Active mock discovery refreshes separately about every fifteen seconds while an account connection is visible, including when no draft is open, so a newly started mock appears without reloading the page. Neither poller overlaps its own requests; both stop when the page is hidden and refresh when it becomes visible or focused. A newly discovered mock never replaces a draft already in progress. The last successful pick state is cached locally so a temporary connection failure does not empty the board. The page displays whether data is live, cached, stale, or unavailable.
 
 The roster view uses the league's fixed lineup shape: 1 QB, 2 RB, 2 WR, 1 TE, 2 FLEX, 1 K, 1 DEF, and 5 bench spots. Picks are assigned chronologically to the first eligible open slot. K, DEF, and any other Sleeper pick without a player-value row still appears using the pick metadata.
 

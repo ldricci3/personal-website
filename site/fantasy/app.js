@@ -1,6 +1,7 @@
 import {
   ROSTER_SLOTS,
   accountLeagueStorageKey,
+  accountMockStorageKey,
   assignRosterSlots,
   buildTeamOptions,
   chooseInitialConnection,
@@ -13,6 +14,7 @@ import {
   leagueDraftStorageKey,
   loadCachedPicks,
   nextPickStatus,
+  normalizeActiveStandaloneMocks,
   normalizeDraftPicks,
   normalizeSleeperAccount,
   normalizeSleeperAccountInput,
@@ -20,8 +22,10 @@ import {
   normalizeSleeperLeagues,
   resolveTeamSelection,
   saveCachedPicks,
+  selectActiveMockId,
   selectDraftId,
   selectLeagueId,
+  selectNewActiveMockId,
   storageGet,
   storageRemove,
   storageSet,
@@ -29,6 +33,7 @@ import {
 
 const API_BASE = 'https://api.sleeper.app/v1';
 const POLL_INTERVAL_MS = 5_000;
+const MOCK_DISCOVERY_INTERVAL_MS = 15_000;
 const FETCH_TIMEOUT_MS = 8_000;
 const SEASON = '2026';
 const STORAGE = Object.freeze({
@@ -54,10 +59,15 @@ const state = {
   connectionMode: 'none',
   account: null,
   leagues: [],
+  selectedLeague: null,
   league: null,
   drafts: [],
+  activeMocks: [],
+  seenActiveMockIds: new Set(),
   users: [],
   draft: null,
+  draftSource: '',
+  loadingDraftId: '',
   teamSelectionValue: '',
   teamSelectionDraftId: '',
   filters: {
@@ -67,13 +77,17 @@ const state = {
     showDrafted: storageGet(localStorage, STORAGE.showDrafted) === 'true',
   },
   pollTimer: null,
+  mockDiscoveryTimer: null,
   refreshing: false,
+  mockDiscoveryRefreshing: false,
   accountRequestId: 0,
   leagueRequestId: 0,
   draftRequestId: 0,
   refreshRequestId: 0,
+  mockDiscoveryRequestId: 0,
   contextToken: 0,
   lastRefreshAt: 0,
+  lastMockDiscoveryAt: 0,
   maxBeer: 1,
 };
 
@@ -82,6 +96,7 @@ const elements = {
   loadAccount: document.querySelector('#load-account'),
   leagueSelect: document.querySelector('#league-select'),
   draftSelect: document.querySelector('#draft-select'),
+  mockSelect: document.querySelector('#mock-select'),
   manualDraftId: document.querySelector('#manual-draft-id'),
   loadManualDraft: document.querySelector('#load-manual-draft'),
   teamSelect: document.querySelector('#team-select'),
@@ -415,6 +430,40 @@ function renderDraftSelect(preferredDraftId = '') {
   return selectedId;
 }
 
+function activeMockLabel(draft) {
+  const name = String(draft.metadata?.name ?? '').trim();
+  const teams = asNumber(draft.settings?.teams);
+  const startedAt = asNumber(draft.start_time || draft.created);
+  const shortId = String(draft.draft_id).slice(-6);
+  return [
+    name || 'Standalone mock',
+    'live standalone mock',
+    teams ? `${teams} teams` : '',
+    startedAt ? `started ${formatTimestamp(startedAt)}` : '',
+    `ID …${shortId}`,
+  ].filter(Boolean).join(' · ');
+}
+
+function renderActiveMockSelect(preferredDraftId = '') {
+  const select = elements.mockSelect;
+  const selectedId = preferredDraftId ? selectActiveMockId(state.activeMocks, preferredDraftId) : '';
+  const placeholderText = state.activeMocks.length
+    ? `Choose 1 of ${state.activeMocks.length} active mock${state.activeMocks.length === 1 ? '' : 's'}`
+    : 'No active mocks found';
+  const placeholder = createElement('option', '', placeholderText);
+  placeholder.value = '';
+  select.replaceChildren(placeholder);
+
+  for (const draft of state.activeMocks) {
+    const option = createElement('option', '', activeMockLabel(draft));
+    option.value = String(draft.draft_id);
+    select.append(option);
+  }
+  select.disabled = state.activeMocks.length === 0;
+  select.value = selectedId;
+  return selectedId;
+}
+
 function renderTeamSelect() {
   const select = elements.teamSelect;
   const { userOptions, slotOptions } = buildTeamOptions(state.users, state.draft ?? {});
@@ -465,13 +514,14 @@ function renderDraftState() {
   elements.draftedCount.textContent = String(state.picks.length);
   if (!state.draft) {
     if (state.pickSource === 'cache') elements.setupSummary.textContent = 'Cached draft · offline';
-    else if (state.league) elements.setupSummary.textContent = state.league.name || 'League loaded';
-    else if (state.account) elements.setupSummary.textContent = `${state.account.display_name || state.account.username || 'Sleeper account'} · choose a league`;
+    else if (state.selectedLeague) elements.setupSummary.textContent = state.selectedLeague.name || 'League loaded';
+    else if (state.account) elements.setupSummary.textContent = `${state.account.display_name || state.account.username || 'Sleeper account'} · choose a league or mock`;
     else elements.setupSummary.textContent = 'Not connected';
     return;
   }
   const draftName = state.draft.metadata?.name || `${state.draft.season || ''} draft`.trim() || 'Sleeper draft';
-  elements.setupSummary.textContent = `${draftName} · ${state.draft.status || 'unknown status'}`;
+  const sourceLabel = state.draftSource === 'account-mock' ? 'Standalone mock · ' : '';
+  elements.setupSummary.textContent = `${sourceLabel}${draftName} · ${state.draft.status || 'unknown status'}`;
 }
 
 function applyPicks(picks, source, savedAt = Date.now(), invalidCount = 0) {
@@ -513,6 +563,8 @@ function resetDraftRuntime() {
   state.refreshRequestId += 1;
   state.refreshing = false;
   state.draft = null;
+  state.draftSource = '';
+  state.loadingDraftId = '';
   state.picks = [];
   state.picksSignature = '';
   state.pickedPlayerKeys = new Set();
@@ -555,32 +607,47 @@ async function loadAccount() {
   state.accountRequestId = requestId;
   state.leagueRequestId += 1;
   state.draftRequestId += 1;
+  state.mockDiscoveryRequestId += 1;
+  stopMockDiscovery();
+  state.mockDiscoveryRefreshing = false;
   elements.loadManualDraft.disabled = false;
   state.connectionMode = 'account';
   state.account = null;
   state.leagues = [];
+  state.selectedLeague = null;
   state.league = null;
   state.drafts = [];
+  state.activeMocks = [];
+  state.seenActiveMockIds = new Set();
   state.users = [];
   elements.leagueSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Finding leagues…', value: '' }));
   elements.leagueSelect.disabled = true;
   elements.draftSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Choose a league first', value: '' }));
   elements.draftSelect.disabled = true;
+  elements.mockSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Finding active mocks…', value: '' }));
+  elements.mockSelect.disabled = true;
   renderDraftState();
   setSetupError();
-  setConnection('loading', 'Finding Sleeper account', `Loading ${SEASON} NFL leagues…`);
+  setConnection('loading', 'Finding Sleeper account', `Loading ${SEASON} leagues and active mocks…`);
   elements.loadAccount.disabled = true;
 
   try {
     const accountPayload = await fetchJson(`/user/${encodeURIComponent(accountInput)}`);
     if (!isCurrentContext(generation)) return;
     const account = normalizeSleeperAccount(accountPayload);
-    const leaguePayload = await fetchJson(`/user/${account.user_id}/leagues/nfl/${SEASON}`);
+    const [leaguePayload, accountDraftPayload] = await Promise.all([
+      fetchJson(`/user/${account.user_id}/leagues/nfl/${SEASON}`),
+      fetchJson(`/user/${account.user_id}/drafts/nfl/${SEASON}`).catch(() => []),
+    ]);
     if (!isCurrentContext(generation)) return;
     const leagues = normalizeSleeperLeagues(leaguePayload, SEASON);
+    const activeMocks = normalizeActiveStandaloneMocks(accountDraftPayload, SEASON);
 
     state.account = account;
     state.leagues = leagues;
+    state.activeMocks = activeMocks;
+    state.seenActiveMockIds = new Set(activeMocks.map((draft) => String(draft.draft_id)));
+    state.lastMockDiscoveryAt = Date.now();
     storageSet(localStorage, STORAGE.accountInput, accountInput);
     storageSet(localStorage, STORAGE.accountId, account.user_id);
     storageSet(localStorage, STORAGE.connectionMode, 'account');
@@ -588,17 +655,26 @@ async function loadAccount() {
     const preferredKey = accountLeagueStorageKey(account.user_id);
     const preferredLeagueId = preferredKey ? storageGet(localStorage, preferredKey) : '';
     const selectedLeagueId = renderLeagueSelect(preferredLeagueId);
+    const mockKey = accountMockStorageKey(account.user_id);
+    const preferredMockId = selectActiveMockId(activeMocks, mockKey ? storageGet(localStorage, mockKey) : '');
+    renderActiveMockSelect(preferredMockId);
     renderDraftState();
 
-    if (!leagues.length) {
+    if (selectedLeagueId) {
+      await loadLeague(selectedLeagueId, { preferredMockId });
+    } else if (preferredMockId) {
+      await loadDraft(preferredMockId, { source: 'account-mock' });
+    } else if (!leagues.length && !activeMocks.length) {
       elements.setup.open = true;
-      setConnection('idle', 'Sleeper account found', `No ${SEASON} NFL leagues were returned for this account.`);
-    } else if (selectedLeagueId) {
-      await loadLeague(selectedLeagueId);
+      setConnection('idle', 'Sleeper account found', `No ${SEASON} NFL leagues or active mocks were returned for this account.`);
     } else {
       elements.setup.open = true;
-      setConnection('idle', 'Sleeper account found', 'Choose a league to open its current draft.');
+      const detail = activeMocks.length > 1
+        ? 'Choose a league or one of the active standalone mocks.'
+        : 'Choose a league to open its current draft.';
+      setConnection('idle', 'Sleeper account found', detail);
     }
+    startMockDiscovery();
   } catch (error) {
     if (!isCurrentContext(generation)) return;
     elements.setup.open = true;
@@ -609,7 +685,7 @@ async function loadAccount() {
   }
 }
 
-async function loadLeague(explicitLeagueId = '') {
+async function loadLeague(explicitLeagueId = '', { preferredMockId = '' } = {}) {
   const leagueId = String(explicitLeagueId || elements.leagueSelect.value).trim();
   const knownLeague = state.leagues.find((league) => String(league.league_id) === leagueId);
   if (!state.account || !knownLeague || !isValidSleeperId(leagueId)) {
@@ -621,9 +697,12 @@ async function loadLeague(explicitLeagueId = '') {
   const generation = beginContextChange();
   const requestId = state.leagueRequestId + 1;
   state.leagueRequestId = requestId;
+  const loadingMarker = `league:${leagueId}`;
+  state.loadingDraftId = loadingMarker;
   state.draftRequestId += 1;
   elements.loadManualDraft.disabled = false;
   state.connectionMode = 'account';
+  state.selectedLeague = knownLeague;
   state.league = null;
   state.drafts = [];
   state.users = [];
@@ -644,6 +723,7 @@ async function loadLeague(explicitLeagueId = '') {
     if (!isCurrentContext(generation)) return;
     if (!league || !isValidSleeperId(league.league_id)) throw new Error('Sleeper did not find that league.');
 
+    state.selectedLeague = league;
     state.league = league;
     state.drafts = normalizeSleeperDrafts(drafts);
     state.users = Array.isArray(users) ? users : [];
@@ -654,8 +734,11 @@ async function loadLeague(explicitLeagueId = '') {
     const selectedDraftId = renderDraftSelect(preferredDraftId);
     renderDraftState();
 
-    if (selectedDraftId) {
+    const selectedLeagueDraft = state.drafts.find((draft) => String(draft.draft_id) === selectedDraftId);
+    if (selectedLeagueDraft?.status === 'drafting' || (selectedDraftId && !preferredMockId)) {
       await loadDraft(selectedDraftId, { source: 'league' });
+    } else if (preferredMockId) {
+      await loadDraft(preferredMockId, { source: 'account-mock' });
     } else {
       elements.setup.open = true;
       setConnection('idle', 'League loaded', 'No drafts were returned for this league. You can still open a standalone mock below.');
@@ -666,8 +749,77 @@ async function loadLeague(explicitLeagueId = '') {
     setSetupError(error.message || 'The league could not be loaded.');
     setConnection('error', 'Sleeper connection failed', 'Choose another league or try again.');
   } finally {
-    if (requestId === state.leagueRequestId) elements.leagueSelect.disabled = state.leagues.length === 0;
+    if (requestId === state.leagueRequestId) {
+      elements.leagueSelect.disabled = state.leagues.length === 0;
+      if (state.loadingDraftId === loadingMarker) state.loadingDraftId = '';
+    }
   }
+}
+
+async function refreshActiveMocks() {
+  const accountId = String(state.account?.user_id ?? '');
+  if (!isValidSleeperId(accountId) || state.connectionMode !== 'account' || state.mockDiscoveryRefreshing || document.hidden) return;
+  const requestId = state.mockDiscoveryRequestId + 1;
+  state.mockDiscoveryRequestId = requestId;
+  state.mockDiscoveryRefreshing = true;
+
+  try {
+    const response = await fetchJson(`/user/${accountId}/drafts/nfl/${SEASON}`);
+    if (requestId !== state.mockDiscoveryRequestId
+      || state.connectionMode !== 'account'
+      || String(state.account?.user_id ?? '') !== accountId) return;
+
+    const accountDrafts = normalizeSleeperDrafts(response);
+    const activeMocks = normalizeActiveStandaloneMocks(response, SEASON);
+    const previousIds = [...state.seenActiveMockIds];
+    const newlyActiveIds = activeMocks
+      .map((draft) => String(draft.draft_id))
+      .filter((draftId) => !state.seenActiveMockIds.has(draftId));
+    const currentDraftId = String(state.draft?.draft_id ?? '');
+    const currentAccountDraft = accountDrafts.find((draft) => String(draft.draft_id) === currentDraftId);
+    if (state.draftSource === 'account-mock' && currentAccountDraft) {
+      state.draft = {
+        ...state.draft,
+        status: currentAccountDraft.status,
+        last_picked: currentAccountDraft.last_picked,
+      };
+      renderDraftState();
+    }
+    const automaticDraftId = state.loadingDraftId
+      ? ''
+      : selectNewActiveMockId(activeMocks, previousIds, state.draft);
+
+    for (const draft of activeMocks) state.seenActiveMockIds.add(String(draft.draft_id));
+    state.activeMocks = activeMocks;
+    state.lastMockDiscoveryAt = Date.now();
+    const selectedMockId = state.draftSource === 'account-mock'
+      && activeMocks.some((draft) => String(draft.draft_id) === currentDraftId)
+      ? currentDraftId
+      : '';
+    renderActiveMockSelect(selectedMockId);
+
+    if (automaticDraftId) {
+      await loadDraft(automaticDraftId, { source: 'account-mock' });
+    } else if (newlyActiveIds.length > 1 && String(state.draft?.status ?? '').toLowerCase() !== 'drafting') {
+      elements.setup.open = true;
+      setConnection('idle', 'Multiple active mocks found', 'Choose the standalone mock you want to follow.');
+    }
+  } catch {
+    // Mock discovery is optional. Keep the current draft and selectors untouched on failure.
+  } finally {
+    if (requestId === state.mockDiscoveryRequestId) state.mockDiscoveryRefreshing = false;
+  }
+}
+
+function startMockDiscovery() {
+  stopMockDiscovery();
+  if (!state.account || state.connectionMode !== 'account' || document.hidden) return;
+  state.mockDiscoveryTimer = window.setInterval(() => refreshActiveMocks(), MOCK_DISCOVERY_INTERVAL_MS);
+}
+
+function stopMockDiscovery() {
+  if (state.mockDiscoveryTimer) window.clearInterval(state.mockDiscoveryTimer);
+  state.mockDiscoveryTimer = null;
 }
 
 async function refreshPicks({ manual = false } = {}) {
@@ -718,6 +870,9 @@ function forgetDraft() {
   state.accountRequestId += 1;
   state.leagueRequestId += 1;
   state.draftRequestId += 1;
+  state.mockDiscoveryRequestId += 1;
+  state.mockDiscoveryRefreshing = false;
+  stopMockDiscovery();
   const removablePrefixes = [
     'fantasyDraft.cache.',
     `${STORAGE.teamSelection}.`,
@@ -749,8 +904,11 @@ function forgetDraft() {
   elements.loadManualDraft.disabled = false;
   state.account = null;
   state.leagues = [];
+  state.selectedLeague = null;
   state.league = null;
   state.drafts = [];
+  state.activeMocks = [];
+  state.seenActiveMockIds = new Set();
   state.users = [];
   state.teamSelectionValue = '';
   elements.accountInput.value = '';
@@ -759,6 +917,8 @@ function forgetDraft() {
   elements.leagueSelect.disabled = true;
   elements.draftSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Choose a league first', value: '' }));
   elements.draftSelect.disabled = true;
+  elements.mockSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Find your account first', value: '' }));
+  elements.mockSelect.disabled = true;
   resetDraftRuntime();
   setSetupError();
   setConnection('idle', 'Draft forgotten', 'Player values remain available. Connect another Sleeper draft when ready.');
@@ -777,29 +937,47 @@ async function loadDraft(explicitDraftId = '', { source = 'manual' } = {}) {
   const generation = beginContextChange();
   const requestId = state.draftRequestId + 1;
   state.draftRequestId = requestId;
+  state.draftSource = source;
+  state.loadingDraftId = draftId;
   const isManual = source === 'manual';
+  const isAccountMock = source === 'account-mock';
   if (isManual) {
     state.accountRequestId += 1;
     state.leagueRequestId += 1;
+    state.mockDiscoveryRequestId += 1;
+    state.mockDiscoveryRefreshing = false;
+    stopMockDiscovery();
     state.connectionMode = 'manual';
     elements.loadAccount.disabled = false;
     state.account = null;
     state.leagues = [];
+    state.selectedLeague = null;
     state.league = null;
     state.drafts = [];
+    state.activeMocks = [];
+    state.seenActiveMockIds = new Set();
     state.users = [];
     elements.manualDraftId.value = draftId;
     elements.leagueSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Standalone mock opened', value: '' }));
     elements.leagueSelect.disabled = true;
     elements.draftSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Standalone mock opened', value: '' }));
     elements.draftSelect.disabled = true;
+    elements.mockSelect.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Connect an account to find active mocks', value: '' }));
+    elements.mockSelect.disabled = true;
+  } else if (isAccountMock) {
+    state.connectionMode = 'account';
+    state.users = state.account ? [state.account] : [];
+    elements.mockSelect.value = draftId;
+    elements.mockSelect.disabled = true;
+    elements.draftSelect.value = '';
   } else if ([...elements.draftSelect.options].some((option) => option.value === draftId)) {
     elements.draftSelect.value = draftId;
     elements.draftSelect.disabled = true;
+    elements.mockSelect.value = '';
   }
 
   setSetupError();
-  readDraftCache(draftId, { preserveUsers: !isManual });
+  readDraftCache(draftId, { preserveUsers: source === 'league' });
   setConnection('loading', 'Opening Sleeper draft', 'Loading draft details and picks…');
   if (isManual) elements.loadManualDraft.disabled = true;
 
@@ -830,7 +1008,7 @@ async function loadDraft(explicitDraftId = '', { source = 'manual' } = {}) {
       }
     } else if (!isValidSleeperId(linkedLeagueId)) {
       league = null;
-      users = [];
+      users = isAccountMock && state.account ? [state.account] : [];
     }
 
     if (!isCurrentContext(generation)) return;
@@ -841,7 +1019,13 @@ async function loadDraft(explicitDraftId = '', { source = 'manual' } = {}) {
     if (isManual) {
       storageSet(localStorage, STORAGE.manualDraftId, draftId);
       storageSet(localStorage, STORAGE.connectionMode, 'manual');
+    } else if (isAccountMock) {
+      const mockKey = accountMockStorageKey(state.account?.user_id);
+      if (mockKey) storageSet(localStorage, mockKey, draftId);
+      state.seenActiveMockIds.add(draftId);
+      storageSet(localStorage, STORAGE.connectionMode, 'account');
     } else {
+      if (league) state.selectedLeague = league;
       const leagueId = String(state.league?.league_id ?? linkedLeagueId);
       const draftKey = leagueDraftStorageKey(leagueId);
       if (draftKey) storageSet(localStorage, draftKey, draftId);
@@ -858,7 +1042,7 @@ async function loadDraft(explicitDraftId = '', { source = 'manual' } = {}) {
     elements.setup.open = true;
     state.draft = null;
     if (isManual) state.users = [];
-    const cached = readDraftCache(draftId, { preserveUsers: !isManual });
+    const cached = readDraftCache(draftId, { preserveUsers: source === 'league' });
     if (cached) {
       setSetupError('Sleeper is unavailable. This offline snapshot may be out of date.');
       setConnection('error', 'Offline snapshot', `Last updated ${formatTimestamp(cached.savedAt)} · retrying while this page stays open`);
@@ -869,8 +1053,12 @@ async function loadDraft(explicitDraftId = '', { source = 'manual' } = {}) {
     }
   } finally {
     if (requestId === state.draftRequestId) {
+      state.loadingDraftId = '';
       elements.loadManualDraft.disabled = false;
-      if (!isManual) elements.draftSelect.disabled = state.drafts.length === 0;
+      if (!isManual) {
+        elements.draftSelect.disabled = state.drafts.length === 0;
+        elements.mockSelect.disabled = state.activeMocks.length === 0;
+      }
     }
     if (isCurrentContext(generation)) renderDraftState();
   }
@@ -886,6 +1074,9 @@ function bindEvents() {
   });
   elements.draftSelect.addEventListener('change', () => {
     if (elements.draftSelect.value) loadDraft(elements.draftSelect.value, { source: 'league' });
+  });
+  elements.mockSelect.addEventListener('change', () => {
+    if (elements.mockSelect.value) loadDraft(elements.mockSelect.value, { source: 'account-mock' });
   });
   elements.loadManualDraft.addEventListener('click', () => loadDraft('', { source: 'manual' }));
   elements.manualDraftId.addEventListener('keydown', (event) => {
@@ -950,16 +1141,31 @@ function bindEvents() {
     elements.valueHelpCopy.hidden = expanded;
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stopPolling();
-    else if (state.draft) {
+    if (document.hidden) {
+      stopPolling();
+      stopMockDiscovery();
+      return;
+    }
+    if (state.draft) {
       refreshPicks();
       startPolling();
     }
+    if (state.account && state.connectionMode === 'account') {
+      refreshActiveMocks();
+      startMockDiscovery();
+    }
   });
   window.addEventListener('focus', () => {
-    if (state.draft && Date.now() - state.lastRefreshAt > 2_000) refreshPicks();
+    const now = Date.now();
+    if (state.draft && now - state.lastRefreshAt > 2_000) refreshPicks();
+    if (state.account && state.connectionMode === 'account' && now - state.lastMockDiscoveryAt > 5_000) {
+      refreshActiveMocks();
+    }
   });
-  window.addEventListener('beforeunload', stopPolling);
+  window.addEventListener('beforeunload', () => {
+    stopPolling();
+    stopMockDiscovery();
+  });
 }
 
 async function initialize() {
