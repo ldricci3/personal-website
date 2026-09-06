@@ -6,9 +6,12 @@ import {
   buildValueCurve,
   chooseInitialConnection,
   createContextGate,
+  curvePositionForSelectedPlayer,
   defaultSortDirection,
   draftPicksSignature,
+  draftPlayerCutoff,
   filterAndSortPlayers,
+  filtersForSelectedPlayer,
   freshSleeperPath,
   getPickedPlayerKeys,
   isStandaloneDraft,
@@ -16,7 +19,7 @@ import {
   isValidSleeperId,
   leagueDraftStorageKey,
   loadCachedPicks,
-  nearestAvailableCurvePoint,
+  nearestCurvePoint,
   nextPickStatus,
   nextSortState,
   normalizeDraftPicks,
@@ -32,6 +35,7 @@ import {
   storageGet,
   storageRemove,
   storageSet,
+  togglePlayerSelection,
 } from './draft-core.js';
 
 const API_BASE = 'https://api.sleeper.app/v1';
@@ -81,7 +85,8 @@ const state = {
   },
   workspaceView: 'table',
   curvePosition: 'ALL',
-  selectedCurvePlayerKey: '',
+  showDeeperPlayers: false,
+  selectedPlayerKey: '',
   curveResizeFrame: null,
   pollTimer: null,
   refreshing: false,
@@ -122,6 +127,8 @@ const elements = {
   playersPanel: document.querySelector('.players-panel'),
   curvePanel: document.querySelector('#curve-panel'),
   curvePositionButtons: [...document.querySelectorAll('[data-curve-position]')],
+  curveDepthToggle: document.querySelector('#curve-depth-toggle'),
+  curveDepthNote: document.querySelector('#curve-depth-note'),
   curveChart: document.querySelector('#value-curve-chart'),
   curvePickNote: document.querySelector('#curve-pick-note'),
   curvePlayerDetails: document.querySelector('#curve-player-details'),
@@ -169,6 +176,58 @@ function setMobileView(view) {
   }
 }
 
+function playerSelectionKey(player) {
+  return String(player?.playerKey || player?.modelKey || player?.sleeperId || '');
+}
+
+function syncTableControls() {
+  elements.search.value = state.filters.search;
+  elements.showDrafted.checked = state.filters.showDrafted;
+  for (const tab of elements.positionTabs) {
+    const active = tab.dataset.position === state.filters.position;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-pressed', String(active));
+  }
+}
+
+function syncCurvePositionTabs() {
+  for (const tab of elements.curvePositionButtons) {
+    const active = tab.dataset.curvePosition === state.curvePosition;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-pressed', String(active));
+  }
+}
+
+function syncCurveDepthToggle() {
+  const cutoff = draftPlayerCutoff(state.draft, state.league);
+  const hasDraftCutoff = Number(state.draft?.settings?.teams) > 0 && Number(state.draft?.settings?.rounds) > 0;
+  const hasLeagueCutoff = Number(state.league?.total_rosters) > 0 && Array.isArray(state.league?.roster_positions)
+    && state.league.roster_positions.length > 0;
+  const rangeLabel = hasDraftCutoff || hasLeagueCutoff
+    ? `the final pick (${cutoff})`
+    : `the 12-team, 15-round fallback (${cutoff})`;
+  elements.curveDepthToggle.textContent = state.showDeeperPlayers ? 'Hide deeper players' : 'Show deeper players';
+  elements.curveDepthToggle.setAttribute('aria-pressed', String(state.showDeeperPlayers));
+  elements.curveDepthNote.textContent = state.showDeeperPlayers
+    ? `Showing all ranked players; the normal range ends at ${rangeLabel}.`
+    : `Showing players through ${rangeLabel}.`;
+}
+
+function playerRowForKey(key) {
+  return [...elements.playerList.querySelectorAll('.player-row')]
+    .find((candidate) => candidate.dataset.playerKey === key);
+}
+
+function curvePointForKey(key) {
+  return [...elements.curveChart.querySelectorAll('.curve-point')]
+    .find((candidate) => candidate.dataset.playerKey === key);
+}
+
+function scrollSelectedRowIntoView() {
+  if (!state.selectedPlayerKey) return;
+  playerRowForKey(state.selectedPlayerKey)?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+}
+
 function setWorkspaceView(view) {
   state.workspaceView = view === 'curves' ? 'curves' : 'table';
   const showCurves = state.workspaceView === 'curves';
@@ -181,24 +240,30 @@ function setWorkspaceView(view) {
   }
   setMobileView('players');
   if (showCurves) renderValueCurve();
+  else window.requestAnimationFrame(scrollSelectedRowIntoView);
 }
 
-function updateCurvePlayerDetails(player = null) {
+function updateCurvePlayerDetails(player = null, { hiddenByFilter = false } = {}) {
   if (!player) {
     elements.curvePlayerDetails.replaceChildren(
-      createElement('strong', '', 'Tap an available point'),
-      createElement('span', '', 'Player details will appear here.'),
+      createElement('strong', '', 'Select a player'),
+      createElement('span', '', 'Tap a point or player row for details.'),
     );
     return;
   }
-  elements.curvePlayerDetails.replaceChildren(
-    createElement('strong', '', player.name),
-    createElement(
-      'span',
-      '',
-      `${player.position}${player.team ? ` · ${player.team}` : ''} · Rank ${player.rank} · Value ${formatValue(player.value)}`,
-    ),
+  const details = createElement(
+    'span',
+    '',
+    `${player.position}${player.team ? ` · ${player.team}` : ''} · Rank ${player.rank} · Value ${formatValue(player.value)}`,
   );
+  const clear = createElement('button', 'curve-clear-selection', 'Clear');
+  clear.type = 'button';
+  clear.setAttribute('aria-label', `Clear ${player.name} selection`);
+  clear.addEventListener('click', clearPlayerSelection);
+  const children = [createElement('strong', '', player.name), details];
+  if (hiddenByFilter) children.push(createElement('span', 'curve-selection-note', 'Selected player is outside the current chart filter.'));
+  children.push(clear);
+  elements.curvePlayerDetails.replaceChildren(...children);
 }
 
 function updateCurveCallout(player = null) {
@@ -217,35 +282,65 @@ function updateCurveCallout(player = null) {
   elements.curveChart.append(group);
 }
 
-function selectCurvePlayer(player) {
-  if (!player || player.drafted) return;
-  state.selectedCurvePlayerKey = player.playerKey || player.modelKey || player.sleeperId || '';
-  for (const point of elements.curveChart.querySelectorAll('.curve-point')) {
-    const selected = point.dataset.playerKey === state.selectedCurvePlayerKey;
-    point.classList.toggle('selected', selected);
-    point.setAttribute('r', selected ? '6.5' : (point.classList.contains('drafted') ? '3.1' : '3.8'));
+function clearPlayerSelection() {
+  if (!state.selectedPlayerKey) return;
+  const focusedKey = document.activeElement?.dataset?.playerKey || '';
+  const focusWasRow = document.activeElement?.classList?.contains('player-row');
+  const focusWasPoint = document.activeElement?.classList?.contains('curve-point');
+  state.selectedPlayerKey = '';
+  renderPlayers();
+  renderValueCurve();
+  if (focusedKey && (focusWasRow || focusWasPoint)) {
+    window.requestAnimationFrame(() => {
+      if (focusWasRow) playerRowForKey(focusedKey)?.focus();
+      if (focusWasPoint) curvePointForKey(focusedKey)?.focus();
+    });
   }
-  updateCurvePlayerDetails(player);
-  updateCurveCallout(player);
+}
+
+function selectPlayer(player, { source = '', restoreFocus = false } = {}) {
+  const key = playerSelectionKey(player);
+  state.selectedPlayerKey = togglePlayerSelection(state.selectedPlayerKey, key);
+  if (state.selectedPlayerKey && source === 'table') {
+    state.curvePosition = curvePositionForSelectedPlayer(state.curvePosition, player.position);
+    if (Number(player.overallRank) > draftPlayerCutoff(state.draft, state.league)) state.showDeeperPlayers = true;
+    syncCurvePositionTabs();
+    syncCurveDepthToggle();
+  } else if (state.selectedPlayerKey && source === 'curve') {
+    state.filters = filtersForSelectedPlayer(state.filters, player);
+    syncTableControls();
+  }
+  renderPlayers();
+  renderValueCurve();
+  if (restoreFocus) {
+    window.requestAnimationFrame(() => {
+      if (source === 'table') playerRowForKey(key)?.focus();
+      if (source === 'curve') curvePointForKey(key)?.focus();
+    });
+  }
 }
 
 function renderValueCurve() {
   if (!state.players.length || elements.curvePanel.hidden) return;
-  const points = buildValueCurve(state.players, {
-    position: state.curvePosition,
-    pickedKeys: state.pickedPlayerKeys,
-  });
-  const allPoints = buildValueCurve(state.players, { pickedKeys: state.pickedPlayerKeys });
+  const cutoff = draftPlayerCutoff(state.draft, state.league);
+  const fullCurve = buildValueCurve(state.players, { pickedKeys: state.pickedPlayerKeys });
+  const visibleCurve = state.showDeeperPlayers
+    ? fullCurve
+    : fullCurve.filter((player) => player.rank <= cutoff);
+  const points = state.curvePosition === 'ALL'
+    ? visibleCurve
+    : visibleCurve.filter((player) => player.position === state.curvePosition);
   const containerWidth = Math.floor(elements.curveChart.parentElement?.getBoundingClientRect().width || 0);
   const width = Math.max(300, containerWidth || 900);
-  const height = width < 520 ? 350 : 430;
+  const height = width < 520 ? 290 : 340;
   const margin = { top: 20, right: 16, bottom: 46, left: width < 520 ? 42 : 52 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
-  const maxRank = Math.max(1, ...allPoints.map((player) => player.rank));
-  const minValue = Math.floor(Math.min(0, ...allPoints.map((player) => player.value)));
-  const maxValue = Math.ceil(Math.max(0, ...allPoints.map((player) => player.value)));
+  const maxRank = Math.max(1, ...visibleCurve.map((player) => player.rank));
+  const minValue = Math.floor(Math.min(0, ...visibleCurve.map((player) => player.value)));
+  const maxValue = Math.ceil(Math.max(0, ...visibleCurve.map((player) => player.value)));
   const valueRange = Math.max(1, maxValue - minValue);
+  syncCurveDepthToggle();
   const mapX = (rank) => margin.left + ((rank - 1) / Math.max(1, maxRank - 1)) * plotWidth;
   const mapY = (value) => margin.top + ((maxValue - value) / valueRange) * plotHeight;
 
@@ -324,8 +419,8 @@ function renderValueCurve() {
 
   const pointGroup = createSvgElement('g', { class: 'curve-points' });
   for (const player of plotted) {
-    const key = player.playerKey || player.modelKey || player.sleeperId || '';
-    const selected = key && key === state.selectedCurvePlayerKey && !player.drafted;
+    const key = playerSelectionKey(player);
+    const selected = key && key === state.selectedPlayerKey;
     const circle = createSvgElement('circle', {
       class: `curve-point ${player.drafted ? 'drafted' : 'available'}${selected ? ' selected' : ''}`,
       cx: player.screenX,
@@ -333,19 +428,18 @@ function renderValueCurve() {
       r: selected ? 6.5 : (player.drafted ? 3.1 : 3.8),
       'data-player-key': key,
       'data-position': player.position,
+      role: 'button',
+      tabindex: '0',
+      'aria-pressed': String(selected),
+      'aria-label': `${player.name}, ${player.position}, rank ${player.rank}, value ${formatValue(player.value)}${player.drafted ? ', drafted' : ''}`,
     });
     circle.append(createSvgElement('title', {}, `${player.name}, ${player.position}, rank ${player.rank}, value ${formatValue(player.value)}${player.drafted ? ', drafted' : ''}`));
-    if (!player.drafted) {
-      circle.setAttribute('role', 'button');
-      circle.setAttribute('tabindex', '0');
-      circle.setAttribute('aria-label', `${player.name}, ${player.position}, rank ${player.rank}, value ${formatValue(player.value)}`);
-      circle.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          selectCurvePlayer(player);
-        }
-      });
-    }
+    circle.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        selectPlayer(player, { source: 'curve', restoreFocus: true });
+      }
+    });
     pointGroup.append(circle);
   }
   elements.curveChart.append(pointGroup);
@@ -355,19 +449,17 @@ function renderValueCurve() {
     if (!bounds.width || !bounds.height) return;
     const x = (event.clientX - bounds.left) * width / bounds.width;
     const y = (event.clientY - bounds.top) * height / bounds.height;
-    const nearest = nearestAvailableCurvePoint(plotted, x, y, 26);
-    if (nearest) selectCurvePlayer(nearest);
+    const nearest = nearestCurvePoint(plotted, x, y, 26);
+    if (nearest) selectPlayer(nearest, { source: 'curve' });
+    else clearPlayerSelection();
   };
 
-  const selected = plotted.find((player) => {
-    const key = player.playerKey || player.modelKey || player.sleeperId || '';
-    return key === state.selectedCurvePlayerKey && !player.drafted;
-  });
-  if (selected) {
-    updateCurvePlayerDetails(selected);
-    updateCurveCallout(selected);
+  const selectedPlayer = fullCurve.find((player) => playerSelectionKey(player) === state.selectedPlayerKey);
+  const selectedPoint = plotted.find((player) => playerSelectionKey(player) === state.selectedPlayerKey);
+  if (selectedPlayer) {
+    updateCurvePlayerDetails(selectedPlayer, { hiddenByFilter: !selectedPoint });
+    updateCurveCallout(selectedPoint);
   } else {
-    state.selectedCurvePlayerKey = '';
     updateCurvePlayerDetails();
     updateCurveCallout();
   }
@@ -441,8 +533,20 @@ async function loadPlayerValues() {
 }
 
 function buildPlayerRow(player) {
-  const row = createElement('tr', `player-row${player.drafted ? ' drafted' : ''}`);
-  row.dataset.playerKey = player.playerKey || player.modelKey || player.sleeperId || '';
+  const key = playerSelectionKey(player);
+  const selected = key && key === state.selectedPlayerKey;
+  const row = createElement('tr', `player-row${player.drafted ? ' drafted' : ''}${selected ? ' selected' : ''}`);
+  row.dataset.playerKey = key;
+  row.tabIndex = 0;
+  row.setAttribute('aria-selected', String(Boolean(selected)));
+  row.setAttribute('aria-label', `${player.name}, ${player.position}, value ${formatValue(player.beerPlus)}, dynasty rank ${formatDynastyRank(player.fantasyProsDynastyEcr2026)}${player.drafted ? ', drafted' : ''}`);
+  row.addEventListener('click', () => selectPlayer(player, { source: 'table' }));
+  row.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectPlayer(player, { source: 'table', restoreFocus: true });
+    }
+  });
 
   const identityCell = createElement('td', 'player-column');
   const identity = createElement('div', 'player-identity');
@@ -688,6 +792,7 @@ function resetDraftRuntime() {
   state.picksSignature = '';
   state.pickedPlayerKeys = new Set();
   state.pickSource = 'none';
+  state.showDeeperPlayers = false;
   state.teamSelectionValue = '';
   state.teamSelectionDraftId = '';
   state.lastRefreshAt = 0;
@@ -1103,15 +1208,15 @@ function bindEvents() {
       state.curvePosition = CURVE_POSITIONS.has(button.dataset.curvePosition)
         ? button.dataset.curvePosition
         : 'ALL';
-      state.selectedCurvePlayerKey = '';
-      for (const tab of elements.curvePositionButtons) {
-        const active = tab.dataset.curvePosition === state.curvePosition;
-        tab.classList.toggle('active', active);
-        tab.setAttribute('aria-pressed', String(active));
-      }
+      syncCurvePositionTabs();
       renderValueCurve();
     });
   }
+  elements.curveDepthToggle.addEventListener('click', () => {
+    state.showDeeperPlayers = !state.showDeeperPlayers;
+    syncCurveDepthToggle();
+    renderValueCurve();
+  });
   elements.search.addEventListener('input', () => {
     state.filters.search = elements.search.value;
     renderPlayers();
@@ -1155,6 +1260,9 @@ function bindEvents() {
       renderValueCurve();
     });
   });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.selectedPlayerKey) clearPlayerSelection();
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       stopPolling();
@@ -1187,7 +1295,9 @@ async function initialize() {
     storageSet(localStorage, STORAGE.sortDirection, state.filters.sortDirection);
   }
   updateSortHeaders();
-  elements.showDrafted.checked = state.filters.showDrafted;
+  syncTableControls();
+  syncCurvePositionTabs();
+  syncCurveDepthToggle();
   const savedAccountInput = storageGet(localStorage, STORAGE.accountInput);
   const savedManualDraftId = storageGet(
     localStorage,

@@ -31,6 +31,8 @@ const SORT_FIELDS = Object.freeze({
   dynasty: 'fantasyProsDynastyEcr2026',
 });
 const SORT_KEYS = new Set(['player', ...Object.keys(SORT_FIELDS)]);
+// Used only before a draft or league can supply teams × rounds.
+const DEFAULT_DRAFT_PLAYER_CUTOFF = 180;
 
 function numeric(value, fallback = 0) {
   if (value === null || value === undefined || value === '') return fallback;
@@ -432,12 +434,49 @@ export function buildValueCurve(players = [], { position = 'ALL', pickedKeys = n
     .sort((left, right) => left.rank - right.rank || String(left.name ?? '').localeCompare(String(right.name ?? '')));
 }
 
-export function nearestAvailableCurvePoint(points = [], targetX, targetY, maxDistance = Infinity) {
+export function draftPlayerCutoff(draft = {}, league = {}, fallback = DEFAULT_DRAFT_PLAYER_CUTOFF) {
+  const teams = numeric(draft?.settings?.teams) || numeric(league?.total_rosters);
+  const rosterRounds = Array.isArray(league?.roster_positions) ? league.roster_positions.length : 0;
+  const rounds = numeric(draft?.settings?.rounds) || rosterRounds;
+  const cutoff = teams * rounds;
+  return cutoff > 0 ? cutoff : Math.max(1, numeric(fallback, DEFAULT_DRAFT_PLAYER_CUTOFF));
+}
+
+export function togglePlayerSelection(currentKey, nextKey) {
+  const current = String(currentKey ?? '');
+  const next = String(nextKey ?? '');
+  if (!next || current === next) return '';
+  return next;
+}
+
+export function curvePositionForSelectedPlayer(currentPosition, playerPosition) {
+  const current = normalizePosition(currentPosition) || 'ALL';
+  const selected = normalizePosition(playerPosition);
+  const supported = new Set(['QB', 'RB', 'WR', 'TE']);
+  if (current === 'ALL' || current === selected) return current;
+  return supported.has(selected) ? selected : 'ALL';
+}
+
+export function filtersForSelectedPlayer(filters = {}, player = {}) {
+  const next = { ...filters };
+  const selectedPosition = normalizePosition(player.position);
+  const currentPosition = normalizePosition(next.position) || 'ALL';
+  if (currentPosition !== 'ALL' && currentPosition !== selectedPosition) {
+    next.position = selectedPosition || 'ALL';
+  }
+
+  const query = normalizeName(next.search);
+  const searchable = normalizeName(`${player.name ?? ''} ${player.team ?? ''} ${player.position ?? ''}`);
+  if (query && !searchable.includes(query)) next.search = '';
+  if (player.drafted) next.showDrafted = true;
+  return next;
+}
+
+export function nearestCurvePoint(points = [], targetX, targetY, maxDistance = Infinity) {
   const x = numericSortValue(targetX);
   const y = numericSortValue(targetY);
   if (x === null || y === null) return null;
   const nearest = points.reduce((best, player) => {
-    if (player?.drafted) return best;
     const pointX = numericSortValue(player?.screenX);
     const pointY = numericSortValue(player?.screenY);
     if (pointX === null || pointY === null) return best;
