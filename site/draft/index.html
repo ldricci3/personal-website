@@ -104,6 +104,18 @@
   .roster h3{margin:14px 0 6px;font-size:15px;color:var(--maroon)}
   .done-banner{background:#e7f6ec;border:1px solid var(--accent);border-radius:8px;
     padding:14px 18px;margin-bottom:14px;font-size:16px}
+  .grade{font-weight:700;padding:2px 10px;border-radius:10px;background:#eee;font-size:13px;white-space:nowrap}
+  .gAp,.gA{background:#d4edda;color:#155724}
+  .gAm{background:#c3e6cb;color:#155724}
+  .gBp{background:#fff3cd;color:#856404}
+  .gB,.gBm{background:#ffeeba;color:#856404}
+  .gC,.gD{background:#f8d7da;color:#721c24}
+  .steal{color:#1a6b3c;font-weight:700}
+  .reach{color:#b02a37;font-weight:700}
+  .suprow{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:6px}
+  .sup{background:#f7f5ef;border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:14px}
+  .suptitle{font-size:11.5px;color:#777;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+  .histrow{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #eee;flex-wrap:wrap}
   .hidden{display:none!important}
 </style>
 </head>
@@ -168,11 +180,14 @@
     <button id="newBtn">New draft</button>
   </div>
   <div class="wrap">
-    <div id="doneBanner" class="done-banner hidden">🏆 Draft complete! Check the board and rosters below.</div>
+    <div id="doneBanner" class="done-banner hidden">🏆 Draft complete!
+      <button id="seeResults" class="small primary" style="margin-left:10px">See the analysis →</button>
+    </div>
     <div class="tabs">
       <button data-tab="players" class="on">Players</button>
       <button data-tab="board">Draft board</button>
       <button data-tab="rosters">Rosters</button>
+      <button data-tab="results">Results</button>
     </div>
     <div id="tab-players">
       <div class="toolbar">
@@ -202,6 +217,7 @@
       <div class="teampills" id="rosterPills"></div>
       <div class="card roster" id="rosterCard"></div>
     </div>
+    <div id="tab-results" class="hidden"></div>
   </div>
 </div>
 
@@ -1129,6 +1145,387 @@ function renderRosters(){
   $('rosterCard').innerHTML = h;
 }
 
+/* ---------- draft results: analysis, history, import ---------- */
+var HIST_KEY = 'atd_draft_history_v1';
+var activeModel = null;  /* {model,label} — imported file or saved draft; null = live draft */
+var resRank = 0;         /* index into model.ranked shown in the team breakdown */
+var _byId = null, _bySeason = null, _careerRank = null;
+
+function playerById(id){
+  if(!_byId){
+    _byId = {};
+    var i;
+    for(i=0;i<BAT.length;i++) _byId[BAT[i].i] = BAT[i];
+    for(i=0;i<PIT.length;i++) _byId[PIT[i].i] = PIT[i];
+  }
+  return _byId[id] || null;
+}
+/* "Name|SeasonYear" -> player id, for matching imported CSV rows to the pool */
+function seasonKeyMap(){
+  if(!_bySeason){
+    _bySeason = {};
+    [['bat',BAT],['pit',PIT]].forEach(function(pair){
+      pair[1].forEach(function(p){
+        p.s.forEach(function(s){ _bySeason[p.n+'|'+s[0]] = p.i; });
+      });
+    });
+  }
+  return _bySeason;
+}
+/* career-WAR rank of every player (0 = best): the "board" a pick is measured against */
+function careerRank(id){
+  if(!_careerRank){
+    _careerRank = {};
+    var all = BAT.concat(PIT).sort(function(a,b){ return b.c-a.c; });
+    for(var i=0;i<all.length;i++) _careerRank[all[i].i] = i;
+  }
+  return (id in _careerRank) ? _careerRank[id] : null;
+}
+/* Steal/reach of one pick: career-WAR board rank minus actual overall pick.
+   Positive = steal (fell past his board slot), negative = reach. */
+/* d = {league, teams[], picks:[{t,name,pos,yr,war,slotIdx,id,overall,round}],
+        date, origin} */
+function analyzeDraft(d){
+  var teams = d.teams.map(function(nm,ti){
+    return {ti:ti, name:nm, picks:[], war:0, swar:0, bwar:0};
+  });
+  d.picks.forEach(function(pk){
+    var T = teams[pk.t];
+    if(!T) return;
+    var rec = {name:pk.name, pos:pk.pos||'', yr:pk.yr, war:pk.war,
+               overall:pk.overall, round:pk.round, slotIdx:pk.slotIdx, steal:null};
+    var rk = (pk.id!=null && pk.id>=0) ? careerRank(pk.id) : null;
+    if(rk==null && pk.name && pk.yr!=null){
+      var hit = seasonKeyMap()[pk.name+'|'+pk.yr];
+      if(hit!=null) rk = careerRank(hit);
+    }
+    if(rk!=null) rec.steal = rk - pk.overall;
+    T.picks.push(rec);
+    T.war += pk.war;
+    if(pk.slotIdx < 17) T.swar += pk.war; else T.bwar += pk.war;
+  });
+  teams.forEach(function(T){
+    T.picks.sort(function(a,b){ return b.war-a.war; });
+    T.best = T.picks[0] || null;
+    var withVal = T.picks.filter(function(r){ return r.steal!=null; });
+    T.topSteal = withVal.slice().sort(function(a,b){ return b.steal-a.steal; })[0] || null;
+    T.topReach = withVal.slice().sort(function(a,b){ return a.steal-b.steal; })[0] || null;
+  });
+  var ranked = teams.slice().sort(function(a,b){ return b.war-a.war; });
+  var mean = ranked.reduce(function(s,T){ return s+T.war; },0) / Math.max(1,ranked.length);
+  var sd = Math.sqrt(ranked.reduce(function(s,T){ return s+(T.war-mean)*(T.war-mean); },0) /
+                     Math.max(1,ranked.length)) || 1;
+  ranked.forEach(function(T,i){
+    T.rank = i+1;
+    var z = (T.war-mean)/sd;
+    T.grade = z>=1.5?'A+':z>=1?'A':z>=0.5?'A-':z>=0?'B+':z>=-0.5?'B':z>=-1?'B-':z>=-1.5?'C':'D';
+  });
+  var all = [];
+  teams.forEach(function(T){ T.picks.forEach(function(r){ all.push({t:T, r:r}); }); });
+  var valued = all.filter(function(x){ return x.r.steal!=null; });
+  function extreme(dir){
+    return valued.slice().sort(function(a,b){ return dir*(b.r.steal-a.r.steal); })[0] || null;
+  }
+  return {league:d.league, date:d.date||null, origin:d.origin||'live',
+          teams:teams, ranked:ranked,
+          steal:extreme(1), reach:extreme(-1),
+          bestSeason:all.slice().sort(function(a,b){ return b.r.war-a.r.war; })[0] || null,
+          bestBench:ranked.slice().sort(function(a,b){ return b.bwar-a.bwar; })[0] || null};
+}
+function liveModel(){
+  var n = nTeams();
+  return analyzeDraft({
+    league:S.league, teams:S.teams,
+    picks:S.picks.map(function(pk,k){
+      return {t:pk.t, name:pk.name, pos:pk.pos, yr:pk.yr, war:pk.war,
+              slotIdx:pk.slot, id:pk.id, overall:k, round:Math.floor(k/n)+1};
+    }),
+    origin:'live'
+  });
+}
+function currentModel(){
+  if(activeModel) return activeModel;
+  if(!S || clock()) return null;
+  return {model:liveModel(), label:'This draft'};
+}
+
+/* ---------- saved drafts ---------- */
+function loadHistory(){
+  try{
+    var h = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+    return Array.isArray(h) ? h : [];
+  }catch(e){ return []; }
+}
+/* called once when a draft completes; records it for the history list */
+function recordHistory(){
+  if(!S || S._histSaved || clock()) return;
+  S._histSaved = true;
+  save();
+  var n = nTeams();
+  var rec = {hid:'h'+Date.now(), date:new Date().toISOString(), league:S.league,
+    teams:S.teams.slice(),
+    picks:S.picks.map(function(pk,k){
+      return {t:pk.t, name:pk.name, pos:pk.pos, yr:pk.yr, war:pk.war,
+              slotIdx:pk.slot, id:pk.id, overall:k, round:Math.floor(k/n)+1};
+    })};
+  var h = loadHistory();
+  h.unshift(rec);
+  try{ localStorage.setItem(HIST_KEY, JSON.stringify(h.slice(0,50))); }catch(e){}
+}
+
+/* ---------- results CSV: export + import ---------- */
+function resultsCsv(){
+  var n = nTeams();
+  var rows = ['Round,Overall,Team,Player,Pos,Year,WAR,Slot,Season line'];
+  S.picks.forEach(function(pk,k){
+    var r = Math.floor(k/n)+1;
+    rows.push([r, k+1, '"'+S.teams[pk.t].replace(/"/g,'""')+'"',
+      '"'+pk.name.replace(/"/g,'""')+'"', pk.pos, pk.yr, pk.war.toFixed(1),
+      SLOTS[pk.slot], '"'+pk.line.replace(/"/g,'""')+'"'].join(','));
+  });
+  return rows.join('\n');
+}
+/* minimal CSV parser (handles quoted fields); returns a draft object or null */
+function parseResultsCsv(text){
+  var rows = [], row = [], cur = '', inQ = false, i, ch;
+  for(i=0;i<text.length;i++){
+    ch = text[i];
+    if(inQ){
+      if(ch==='"'){ if(text[i+1]==='"'){ cur+='"'; i++; } else inQ = false; }
+      else cur += ch;
+    }
+    else if(ch==='"') inQ = true;
+    else if(ch===','){ row.push(cur); cur=''; }
+    else if(ch==='\n'){ row.push(cur); rows.push(row); row=[]; cur=''; }
+    else if(ch==='\r'){ /* skip */ }
+    else cur += ch;
+  }
+  if(cur!=='' || row.length){ row.push(cur); rows.push(row); }
+  rows = rows.filter(function(r){ return r.length>1 || (r.length===1 && r[0].trim()!==''); });
+  if(!rows.length) return null;
+  var head = rows[0].map(function(h){ return h.trim().toLowerCase(); });
+  function ci(name){
+    for(var k=0;k<head.length;k++) if(head[k]===name || head[k].indexOf(name)>=0) return k;
+    return -1;
+  }
+  var cTeam=ci('team'), cPlayer=ci('player'), cPos=ci('pos'), cYear=ci('year'),
+      cWar=ci('war'), cSlot=ci('slot'), cOverall=ci('overall'), cRound=ci('round');
+  if(cTeam<0 || cPlayer<0 || cYear<0 || cWar<0) return null;
+  var teams = [], tmap = {};
+  rows.slice(1).forEach(function(r){
+    var nm = (r[cTeam]||'').trim();
+    if(nm && !(nm in tmap)){ tmap[nm] = teams.length; teams.push(nm); }
+  });
+  if(!teams.length) return null;
+  var picks = [];
+  rows.slice(1).forEach(function(r){
+    var nm = (r[cTeam]||'').trim();
+    if(!(nm in tmap)) return;
+    var yr = parseInt(r[cYear],10), war = parseFloat(r[cWar]);
+    if(isNaN(yr) || isNaN(war)) return;
+    var slotStr = (cSlot>=0 ? r[cSlot] : '').trim();
+    var slotIdx = SLOTS.indexOf(slotStr);
+    if(slotIdx < 0) slotIdx = 17;
+    picks.push({t:tmap[nm], name:(r[cPlayer]||'').trim(),
+      pos:cPos>=0 ? (r[cPos]||'').trim() : '', yr:yr, war:war,
+      slotIdx:slotIdx, id:-1,
+      overall:cOverall>=0 ? parseInt(r[cOverall],10)-1 : -1,
+      round:cRound>=0 ? parseInt(r[cRound],10) : 0});
+  });
+  if(!picks.length) return null;
+  if(cOverall>=0) picks.sort(function(a,b){ return a.overall-b.overall; });
+  var n = teams.length;
+  picks.forEach(function(p,ix){
+    if(!(p.overall>=0)) p.overall = ix;
+    if(!(p.round>0)) p.round = Math.floor(p.overall/n)+1;
+  });
+  /* draft order = round-1 pick sequence; snake if round 2 is its reverse */
+  function seqFor(rd){
+    return picks.filter(function(p){ return p.round===rd; })
+                .sort(function(a,b){ return a.overall-b.overall; })
+                .map(function(p){ return p.t; });
+  }
+  var order = seqFor(1), seq2 = seqFor(2);
+  var snake = order.length>0 && seq2.length>0 &&
+              seq2.join(',') === order.slice().reverse().join(',');
+  return {league:'Imported draft', teams:teams, order:order, snake:snake,
+          picks:picks, date:new Date().toISOString(), origin:'import'};
+}
+
+/* ---------- results rendering ---------- */
+function gradeCls(g){ return 'g'+g.replace('+','p').replace('-','m'); }
+function fmtDate(iso){
+  try{
+    var d = new Date(iso);
+    return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+', '+
+           d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+  }catch(e){ return ''; }
+}
+function showTab(t){
+  document.querySelectorAll('.tabs button').forEach(function(x){
+    x.classList.toggle('on', x.dataset.tab===t);
+  });
+  ['players','board','rosters','results'].forEach(function(x){
+    $('tab-'+x).classList.toggle('hidden', x!==t);
+  });
+  if(t==='board') renderBoard();
+  if(t==='rosters') renderRosters();
+  if(t==='results') renderResults();
+}
+function renderResults(){
+  var box = $('tab-results');
+  var cm = currentModel();
+  var h = '';
+  if(cm){
+    var m = cm.model;
+    if(resRank >= m.ranked.length) resRank = 0;
+    h += '<div class="card">';
+    h += '<div class="row" style="justify-content:space-between;margin-bottom:12px">'+
+         '<h2 style="margin:0">Results · '+esc(m.league)+'</h2>';
+    if(activeModel){
+      h += '<span><span class="hint">'+esc(cm.label)+'</span> '+
+           '<button class="small" id="backLive">Back to live draft</button></span>';
+    }
+    h += '</div>';
+    h += '<table class="stats"><thead><tr><th class="l">#</th><th class="l">Team</th>'+
+         '<th>Grade</th><th>Total WAR</th><th>Starters</th><th>Bench</th>'+
+         '<th class="l">Best pick</th></tr></thead><tbody>';
+    m.ranked.forEach(function(T){
+      h += '<tr><td class="l">'+T.rank+'</td><td class="l"><b>'+esc(T.name)+'</b></td>'+
+        '<td><span class="grade '+gradeCls(T.grade)+'">'+T.grade+'</span></td>'+
+        '<td><b>'+T.war.toFixed(1)+'</b></td><td>'+T.swar.toFixed(1)+'</td>'+
+        '<td>'+T.bwar.toFixed(1)+'</td>'+
+        '<td class="l">'+(T.best ? esc(T.best.name)+' <span class="hint">'+T.best.yr+
+          ' · '+T.best.war.toFixed(1)+' WAR · pick '+(T.best.overall+1)+'</span>' : '—')+'</td></tr>';
+    });
+    h += '</tbody></table>';
+    h += '<h3 style="margin:16px 0 8px;color:var(--maroon)">Draft superlatives</h3><div class="suprow">';
+    function sup(t, inner){
+      return '<div class="sup"><div class="suptitle">'+t+'</div><div>'+inner+'</div></div>';
+    }
+    function pkLine(x){
+      return '<b>'+esc(x.r.name)+'</b> <span class="hint">'+x.r.yr+'</span><br>'+
+             '<span class="hint">'+esc(x.t.name)+' · pick '+(x.r.overall+1)+'</span>';
+    }
+    if(m.steal) h += sup('Biggest steal', pkLine(m.steal)+
+      '<br><span class="steal">+'+m.steal.r.steal+' spots vs the board</span>');
+    if(m.reach) h += sup('Biggest reach', pkLine(m.reach)+
+      '<br><span class="reach">'+m.reach.r.steal+' spots vs the board</span>');
+    if(m.bestSeason) h += sup('Best season drafted', pkLine(m.bestSeason)+
+      '<br><b>'+m.bestSeason.r.war.toFixed(1)+' WAR</b>');
+    if(m.bestBench) h += sup('Deepest bench', '<b>'+esc(m.bestBench.name)+'</b>'+
+      '<br><b>'+m.bestBench.bwar.toFixed(1)+' WAR</b> <span class="hint">from the bench</span>');
+    h += '</div>';
+    h += '<h3 style="margin:16px 0 8px;color:var(--maroon)">Team breakdown</h3>';
+    h += '<div class="teampills" id="resPills"></div><div id="resTeamCard"></div>';
+    h += '</div>';
+  } else {
+    h += '<div class="card"><h2>Results</h2><div class="hint">Finish the draft to see the full '+
+         'analysis here: team grades, steals and reaches, and a team-by-team breakdown. '+
+         'You can also upload a previously exported results file below.</div></div>';
+  }
+  h += '<div class="card"><h2>Import &amp; history</h2>'+
+    '<div class="row"><button id="importBtn">Upload results CSV</button>'+
+    '<input type="file" id="importFile" accept=".csv,text/csv" class="hidden">'+
+    '<span class="hint">Upload a results file exported from this app (the Export button) to analyze it here.</span></div>'+
+    '<div id="histList" style="margin-top:12px"></div></div>';
+  box.innerHTML = h;
+  if(cm){
+    var m2 = cm.model;
+    var pills = $('resPills');
+    m2.ranked.forEach(function(T,i){
+      var b = document.createElement('button');
+      b.className = 'small'+(i===resRank ? ' on' : '');
+      b.innerHTML = '<span class="grade '+gradeCls(T.grade)+'" style="margin-right:6px">'+
+                    T.grade+'</span> '+esc(T.name);
+      b.onclick = (function(ii){ return function(){ resRank = ii; renderResults(); }; })(i);
+      pills.appendChild(b);
+    });
+    renderResTeam(m2);
+    var bl = $('backLive');
+    if(bl) bl.onclick = function(){ activeModel = null; resRank = 0; renderResults(); };
+  }
+  $('importBtn').onclick = function(){ $('importFile').click(); };
+  $('importFile').onchange = function(){
+    var f = this.files && this.files[0];
+    if(!f) return;
+    var rd = new FileReader();
+    rd.onload = function(){
+      var d = parseResultsCsv(String(rd.result || ''));
+      if(!d){ alert('Could not read that file. Upload a results CSV exported from this app.'); return; }
+      activeModel = {model:analyzeDraft(d), label:'Imported file · '+f.name};
+      resRank = 0;
+      showTab('results');
+      window.scrollTo(0,0);
+    };
+    rd.readAsText(f);
+    this.value = '';
+  };
+  renderHistList();
+}
+function renderResTeam(m){
+  var T = m.ranked[resRank];
+  var box = $('resTeamCard');
+  if(!T){ box.innerHTML = ''; return; }
+  var h = '<div class="card" style="margin:10px 0 0"><div class="row" style="justify-content:space-between">'+
+    '<h2 style="margin:0">'+esc(T.name)+' <span class="grade '+gradeCls(T.grade)+'">'+T.grade+'</span></h2>'+
+    '<span class="hint">'+T.war.toFixed(1)+' total WAR · '+T.swar.toFixed(1)+
+    ' starters · '+T.bwar.toFixed(1)+' bench</span></div>';
+  h += '<table class="stats" style="margin-top:10px"><thead><tr><th class="l">Slot</th>'+
+       '<th class="l">Player</th><th>Year</th><th>WAR</th><th>Pick</th>'+
+       '<th class="l">Value</th></tr></thead><tbody>';
+  T.picks.forEach(function(r){
+    var v;
+    if(r.steal==null) v = '<span class="hint">—</span>';
+    else if(r.steal>=20) v = '<span class="steal">Steal +'+r.steal+'</span>';
+    else if(r.steal<=-20) v = '<span class="reach">Reach '+r.steal+'</span>';
+    else v = '<span class="hint">'+(r.steal>0?'+':'')+r.steal+'</span>';
+    h += '<tr><td class="l"><span class="pospill">'+esc(SLOTS[r.slotIdx]||'?')+'</span></td>'+
+      '<td class="l"><b>'+esc(r.name)+'</b> <span class="hint">'+esc(r.pos)+'</span></td>'+
+      '<td>'+r.yr+'</td><td><b>'+r.war.toFixed(1)+'</b></td><td>'+(r.overall+1)+'</td>'+
+      '<td class="l">'+v+'</td></tr>';
+  });
+  box.innerHTML = h+'</tbody></table></div>';
+}
+function renderHistList(){
+  var box = $('histList');
+  var list = loadHistory();
+  var s = '<h3 style="margin:4px 0 8px;color:var(--maroon)">Saved drafts</h3>';
+  if(!list.length) s += '<div class="hint">Completed drafts are saved here automatically.</div>';
+  list.forEach(function(rec){
+    s += '<div class="histrow"><span class="dot" style="background:var(--maroon)"></span>'+
+      '<b>'+esc(rec.league)+'</b><span class="hint">'+fmtDate(rec.date)+' · '+
+      rec.teams.length+' teams · '+rec.picks.length+' picks</span>'+
+      '<span style="flex:1"></span>'+
+      '<button class="small" data-hv="'+rec.hid+'">View</button> '+
+      '<button class="small" data-hd="'+rec.hid+'">Delete</button></div>';
+  });
+  box.innerHTML = s;
+  box.onclick = function(e){
+    var b = e.target.closest('button');
+    if(!b) return;
+    var items = loadHistory();
+    if(b.dataset.hv){
+      var rec = null;
+      items.forEach(function(r){ if(r.hid===b.dataset.hv) rec = r; });
+      if(rec){
+        activeModel = {model:analyzeDraft(rec), label:rec.league+' · '+fmtDate(rec.date)};
+        resRank = 0;
+        renderResults();
+        window.scrollTo(0,0);
+      }
+    } else if(b.dataset.hd){
+      if(confirm('Delete this saved draft?')){
+        try{
+          localStorage.setItem(HIST_KEY,
+            JSON.stringify(items.filter(function(r){ return r.hid!==b.dataset.hd; })));
+        }catch(e2){}
+        renderResults();
+      }
+    }
+  };
+}
+
 /* ---------- clock / tabs / export ---------- */
 function renderClock(){
   var ck = clock();
@@ -1141,6 +1538,8 @@ function renderClock(){
     $('simAllBtn').disabled = true;
     $('cpuBtn').disabled = true;
     $('doneBanner').classList.remove('hidden');
+    recordHistory();
+    if(!$('tab-results').classList.contains('hidden')) renderResults();
     return;
   }
   $('doneBanner').classList.add('hidden');
@@ -1159,27 +1558,11 @@ function renderClock(){
 }
 function initTabs(){
   document.querySelectorAll('.tabs button').forEach(function(b){
-    b.onclick = function(){
-      document.querySelectorAll('.tabs button').forEach(function(x){ x.classList.remove('on'); });
-      b.classList.add('on');
-      ['players','board','rosters'].forEach(function(t){
-        $('tab-'+t).classList.toggle('hidden', t!==b.dataset.tab);
-      });
-      if(b.dataset.tab==='board') renderBoard();
-      if(b.dataset.tab==='rosters') renderRosters();
-    };
+    b.onclick = function(){ showTab(b.dataset.tab); };
   });
 }
 function exportCsv(){
-  var n = nTeams();
-  var rows = ['Round,Overall,Team,Player,Pos,Year,WAR,Slot,Season line'];
-  S.picks.forEach(function(pk,k){
-    var r = Math.floor(k/n)+1;
-    rows.push([r, k+1, '"'+S.teams[pk.t].replace(/"/g,'""')+'"',
-      '"'+pk.name.replace(/"/g,'""')+'"', pk.pos, pk.yr, pk.war.toFixed(1),
-      SLOTS[pk.slot], '"'+pk.line.replace(/"/g,'""')+'"'].join(','));
-  });
-  var blob = new Blob([rows.join('\n')], {type:'text/csv'});
+  var blob = new Blob([resultsCsv()], {type:'text/csv'});
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'all-time-draft-results.csv';
@@ -1189,6 +1572,7 @@ function exportCsv(){
 function renderAll(){
   renderClock(); renderPool(); renderBoard();
   if(!$('tab-rosters').classList.contains('hidden')) renderRosters();
+  if(!$('tab-results').classList.contains('hidden')) renderResults();
   if(modalP) updateDraftBtn();
   scheduleCpu();
 }
@@ -1208,6 +1592,7 @@ function initRoom(){
     undo();
   };
   $('exportBtn').onclick = exportCsv;
+  $('seeResults').onclick = function(){ showTab('results'); window.scrollTo(0,0); };
   $('newBtn').onclick = function(){
     if(confirm('Start over with a new draft? This clears all picks.')){
       try{ localStorage.removeItem(SAVE_KEY); }catch(e){}
