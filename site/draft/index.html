@@ -62,6 +62,8 @@
   .tabs button.on{background:#fff;border:1px solid var(--line);border-bottom:1px solid #fff;
     margin-bottom:-2px;font-weight:600;color:var(--maroon)}
   .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .qchk{display:flex;align-items:center;gap:6px;font-size:13px;color:#5c4a1f;cursor:pointer;white-space:nowrap;user-select:none}
+  .qchk input{accent-color:var(--maroon);width:15px;height:15px;cursor:pointer}
   .toolbar .grow{flex:1}
   table.stats{border-collapse:collapse;width:100%;font-size:14px;background:#fff}
   table.stats th{background:var(--th-bg);border:1px solid var(--line);padding:6px 8px;
@@ -181,6 +183,7 @@
         <span class="seg" id="viewSeg"></span>
         <input type="text" id="search" placeholder="Search players…" style="width:200px">
         <select id="posFilter"><option value="">All positions</option></select>
+        <label class="qchk" title="Hide players below the playing-time minimum (3000 PA / 900 IP career, 502 PA / 162 IP single season)"><input type="checkbox" id="qualChk"> Qualified</label>
         <span class="grow"></span><span class="hint" id="poolCount"></span>
       </div>
       <div class="hint" style="margin-bottom:8px">Click any column header to sort. Click again to flip the order.</div>
@@ -819,6 +822,10 @@ var PIT_VIEWS={
 };
 
 var pool = {kind:'bat', view:'war', scope:'c', sortId:'c', dir:-1, q:'', pos:'', shown:250};
+/* Minimum playing time for the "Qualified" filter: [batter PA, pitcher outs] per scope
+   (900 IP = 2700 outs, 600 IP = 1800 outs, 162 IP = 486 outs) */
+var QUAL = {c:[3000,2700], p7:[2000,1800], b:[502,486]};
+var qualOnly = false;
 /* stat scope: career | peak year (best season) | 7-year peak.
    scopeVec(p) returns the q-vector for the active scope; scopeWAR(p) the WAR. */
 var SCOPES = {c:'Career', b:'Peak year', p7:'7-yr peak'};
@@ -829,6 +836,8 @@ function curView(){ return curViews()[pool.view]; }
 /* columns for the active table; WAR tables build scope-dependent columns */
 function viewCols(){ var v = curView(); return (typeof v.cols==='function') ? v.cols() : v.cols; }
 function curCol(){
+  if(pool.sortId==='name') return {id:'name', get:function(p){ return p.n; }};
+  if(pool.sortId==='pos') return {id:'pos', get:function(p){ return p.p; }};
   var cols = viewCols();
   for(var i=0;i<cols.length;i++) if(cols[i].id===pool.sortId) return cols[i];
   return cols[0];
@@ -841,6 +850,11 @@ function poolList(){
     var p = src[j];
     if(drafted[p.i]) continue;
     if(q && p.n.toLowerCase().indexOf(q)<0) continue;
+    if(qualOnly){
+      var qi = pool.kind==='bat' ? BQ.PA : PQ.OUTS;
+      var qv = scopeVec(p)[qi];
+      if(!(qv >= QUAL[pool.scope][pool.kind==='bat'?0:1])) continue;
+    }
     if(pool.pos){
       if(pool.kind==='bat'){ if(batPos(p).indexOf(pool.pos)<0) continue; }
       else if(p.p!==pool.pos) continue;
@@ -867,15 +881,16 @@ function renderPosFilter(){
   });
   pool.pos = '';
 }
+function thSort(cid, label, left){
+  var arrow = pool.sortId===cid ? ' <span class="arr">'+(pool.dir===-1?'▼':'▲')+'</span>' : '';
+  return '<th class="'+(left?'l ':'')+'sortable" data-cid="'+cid+'">'+label+arrow+'</th>';
+}
 function renderPool(){
   var arr = poolList();
   $('poolCount').textContent = arr.length.toLocaleString()+' available';
   var cols = viewCols();
-  var h = '<tr><th class="l">#</th><th class="l">Player</th><th class="l">Pos</th>';
-  cols.forEach(function(c){
-    var arrow = c.id===pool.sortId ? ' <span class="arr">'+(pool.dir===-1?'▼':'▲')+'</span>' : '';
-    h += '<th class="sortable" data-cid="'+c.id+'">'+c.h+arrow+'</th>';
-  });
+  var h = '<tr><th class="l">#</th>'+thSort('name','Player',true)+thSort('pos','Pos',true);
+  cols.forEach(function(c){ h += thSort(c.id, c.h, false); });
   h += '</tr>';
   $('poolHead').innerHTML = h;
   var tb = $('poolBody'); tb.innerHTML='';
@@ -946,11 +961,12 @@ function initPool(){
     deb = setTimeout(function(){ pool.q = $('search').value.trim(); pool.shown=250; renderPool(); }, 200);
   });
   $('posFilter').onchange = function(){ pool.pos = this.value; pool.shown=250; renderPool(); };
+  $('qualChk').onchange = function(){ qualOnly = this.checked; pool.shown=250; renderPool(); };
   $('poolHead').onclick = function(e){
     var th = e.target.closest('th'); if(!th || !th.dataset.cid) return;
     var cid = th.dataset.cid;
     if(pool.sortId===cid) pool.dir = -pool.dir;
-    else { pool.sortId = cid; pool.dir = -1; }
+    else { pool.sortId = cid; pool.dir = (cid==='name'||cid==='pos') ? 1 : -1; }
     pool.shown = 250;
     renderPool();
   };
@@ -1224,7 +1240,7 @@ if(saved){
 if(typeof DRAFT_DATA !== 'undefined' && DRAFT_DATA){
   bootDraftRoom(DRAFT_DATA);
 } else if(typeof fetch !== 'undefined'){
-  fetch('draft_data.json').then(function(r){
+  fetch('draft_data.json?v=b24f52b1bf').then(function(r){
     if(!r.ok) throw new Error('http '+r.status);
     return r.json();
   }).then(function(d){ bootDraftRoom(d); }).catch(function(){
