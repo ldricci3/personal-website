@@ -38,7 +38,11 @@
   .seg button.on{background:var(--maroon);color:#fff}
   .stepper{display:inline-flex;align-items:center;gap:10px}
   .stepper b{font-size:20px;min-width:2ch;text-align:center}
-  .teams-setup{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-top:8px}
+  .teams-setup{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px;margin-top:8px}
+  .teamcard{background:#fff;border:1px solid var(--line);border-radius:6px;padding:10px 12px}
+  .teamcard .row{gap:8px}
+  .teamcard select{max-width:100%}
+  .teamcard .pdesc{margin-top:6px;min-height:2.2em}
   .order-list{list-style:none;margin:8px 0 0;padding:0;max-width:560px}
   .order-list li{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);
     border-radius:6px;margin-bottom:6px;background:#fff}
@@ -58,6 +62,8 @@
   .tabs button.on{background:#fff;border:1px solid var(--line);border-bottom:1px solid #fff;
     margin-bottom:-2px;font-weight:600;color:var(--maroon)}
   .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .qchk{display:flex;align-items:center;gap:6px;font-size:13px;color:#5c4a1f;cursor:pointer;white-space:nowrap;user-select:none}
+  .qchk input{accent-color:var(--maroon);width:15px;height:15px;cursor:pointer}
   .toolbar .grow{flex:1}
   table.stats{border-collapse:collapse;width:100%;font-size:14px;background:#fff}
   table.stats th{background:var(--th-bg);border:1px solid var(--line);padding:6px 8px;
@@ -98,6 +104,18 @@
   .roster h3{margin:14px 0 6px;font-size:15px;color:var(--maroon)}
   .done-banner{background:#e7f6ec;border:1px solid var(--accent);border-radius:8px;
     padding:14px 18px;margin-bottom:14px;font-size:16px}
+  .grade{font-weight:700;padding:2px 10px;border-radius:10px;background:#eee;font-size:13px;white-space:nowrap}
+  .gAp,.gA{background:#d4edda;color:#155724}
+  .gAm{background:#c3e6cb;color:#155724}
+  .gBp{background:#fff3cd;color:#856404}
+  .gB,.gBm{background:#ffeeba;color:#856404}
+  .gC,.gD{background:#f8d7da;color:#721c24}
+  .steal{color:#1a6b3c;font-weight:700}
+  .reach{color:#b02a37;font-weight:700}
+  .suprow{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:6px}
+  .sup{background:#f7f5ef;border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:14px}
+  .suptitle{font-size:11.5px;color:#777;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+  .histrow{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #eee;flex-wrap:wrap}
   .hidden{display:none!important}
 </style>
 </head>
@@ -128,9 +146,12 @@
         <select id="humanSel" style="min-width:160px"></select>
       </label>
     </div>
-    <div class="hint" style="margin-bottom:6px">Every other team is CPU and drafts automatically on its turn.</div>
+    <div class="hint" style="margin-bottom:6px">Every other team is CPU and drafts automatically on its turn. Give each one a drafting personality and a skill level — or randomize them.</div>
     <div class="hint" style="margin-bottom:6px">23 rounds · C, 1B, 2B, 3B, SS, 3×OF, UTIL, 2×SP, 2×RP, 4×P, 6 bench</div>
-    <h2 style="margin-top:18px">Teams</h2>
+    <div class="row" style="margin-top:18px;justify-content:space-between">
+      <h2 style="margin:0">Teams</h2>
+      <button id="cpuShuffleBtn" class="small">🎲 Randomize CPU styles</button>
+    </div>
     <div class="teams-setup" id="teamNames"></div>
   </div>
   <div class="card">
@@ -152,26 +173,32 @@
     <span class="spacer"></span>
     <button id="autoBtn" class="primary">Auto-pick</button>
     <button id="simBtn">Sim to my pick</button>
+    <button id="simAllBtn">Sim draft</button>
     <button id="cpuBtn">Pause CPU</button>
     <button id="undoBtn">Undo</button>
     <button id="exportBtn">Export</button>
     <button id="newBtn">New draft</button>
   </div>
   <div class="wrap">
-    <div id="doneBanner" class="done-banner hidden">🏆 Draft complete! Check the board and rosters below.</div>
+    <div id="doneBanner" class="done-banner hidden">🏆 Draft complete!
+      <button id="seeResults" class="small primary" style="margin-left:10px">See the analysis →</button>
+    </div>
     <div class="tabs">
       <button data-tab="players" class="on">Players</button>
       <button data-tab="board">Draft board</button>
       <button data-tab="rosters">Rosters</button>
+      <button data-tab="results">Results</button>
     </div>
     <div id="tab-players">
       <div class="toolbar">
         <span class="seg" id="poolSeg">
           <button data-v="bat" class="on">Batters</button><button data-v="pit">Pitchers</button>
         </span>
+        <span class="seg" id="scopeSeg"></span>
         <span class="seg" id="viewSeg"></span>
         <input type="text" id="search" placeholder="Search players…" style="width:200px">
         <select id="posFilter"><option value="">All positions</option></select>
+        <label class="qchk" title="Hide players below the playing-time minimum (3000 PA / 900 IP career, 502 PA / 162 IP single season)"><input type="checkbox" id="qualChk"> Qualified</label>
         <span class="grow"></span><span class="hint" id="poolCount"></span>
       </div>
       <div class="hint" style="margin-bottom:8px">Click any column header to sort. Click again to flip the order.</div>
@@ -190,6 +217,7 @@
       <div class="teampills" id="rosterPills"></div>
       <div class="card roster" id="rosterCard"></div>
     </div>
+    <div id="tab-results" class="hidden"></div>
   </div>
 </div>
 
@@ -225,7 +253,7 @@ var SLOTS = ['C','1B','2B','3B','SS','OF','OF','OF','UTIL',
              'SP','SP','RP','RP','P','P','P','P',
              'BN','BN','BN','BN','BN','BN'];
 var ROUNDS = SLOTS.length;
-var SAVE_KEY = 'atd_draft_v3';
+var SAVE_KEY = 'atd_draft_v4';
 
 /* ---------- helpers ---------- */
 function $(id){ return document.getElementById(id); }
@@ -291,8 +319,9 @@ function isHumanTurn(){
   return !!ck && ck.team === S.human;
 }
 /* CPU auto-draft: after a short beat, CPU teams pick on their own */
-var cpuTimer = null, cpuPaused = false;
+var cpuTimer = null, cpuPaused = false, noRender = false, fastSim = false;
 function scheduleCpu(){
+  if(fastSim) return;
   if(cpuTimer){ clearTimeout(cpuTimer); cpuTimer = null; }
   var ck = clock();
   if(!ck || cpuPaused || ck.team === S.human) return;
@@ -306,6 +335,20 @@ function simToHuman(){
     autoPick();
   }
   scheduleCpu();
+}
+/* fast full-draft sim: every team (yours included) picks instantly, no timers */
+function simAll(){
+  if(cpuTimer){ clearTimeout(cpuTimer); cpuTimer = null; }
+  if(!clock()) return;
+  fastSim = true; noRender = true;
+  var guard = totalPicks() + 5;
+  while(guard-- > 0){
+    if(!clock()) break;
+    cpuPick(); /* your turns use the default sharp auto-pick */
+  }
+  fastSim = false; noRender = false;
+  save();
+  renderAll();
 }
 function assignSlot(t, kind, p){
   for(var i=0;i<ROUNDS;i++){
@@ -336,37 +379,61 @@ function doDraft(id, kind, yrIdx){
   teamSlots[ck.team][si] = pk;
   save();
   if(modalP && modalP.i === id) closeModal();
-  renderAll();
+  if(!noRender) renderAll();
 }
 /* ---------- CPU draft engine ----------
-   Each CPU team gets a strategy archetype at draft creation. Every pick is
-   scored as: career WAR (base value) + archetype leans + roster-need bonus
-   (grows as the draft goes on) + scarcity bonus (reach when a position is
-   drying up faster than your next turn) + tier-cliff bonus (last good player
-   before a talent drop at his position) + noise (bigger in later rounds). */
-var ARCHETYPES = {
-  bpa:    {label:'Best Available', power:0,    speed:0,    pitch:0,     need:0.4,  noise:1.0},
-  slugger:{label:'Slugger',        power:1.0,  speed:0,    pitch:-0.15, need:0.5,  noise:1.0},
-  wheels: {label:'Speed',          power:0,    speed:1.0,  pitch:-0.15, need:0.5,  noise:1.0},
-  ace:    {label:'Rotation First', power:-0.1, speed:0,    pitch:1.0,   need:0.6,  noise:0.8},
-  builder:{label:'Roster Builder', power:0,    speed:0,    pitch:0,      need:1.3,  noise:0.8},
-  taco:   {label:'Chaos',          power:0,    speed:0,    pitch:0,      need:-0.4, noise:2.6}
+   Each CPU team gets a persona (drafting style) and a skill level at draft
+   creation. Every pick is scored as: career WAR (base value) + persona
+   style leans + persona blind spots (systematic mispricings you can exploit:
+   the scout overpays for AVG/RBI/wins, the rookie chases star power) +
+   roster-need bonus (grows as the draft goes on) + scarcity bonus (reach
+   when a position is drying up faster than your next turn) + tier-cliff
+   bonus (last good player before a talent drop at his position) + noise
+   (bigger in later rounds, and bigger for worse GMs). */
+var PERSONAS = {
+  saber:  {label:'Sabermetrics GM',  desc:'Pure value. Trusts WAR and projections, no blind spots.',
+           power:0,    speed:0,   pitch:0,     need:0.9,  noise:0.7},
+  scout:  {label:'Old-School Scout', desc:'Loves batting average, RBIs and 20-game winners. Pays for walks and defense.',
+           kind:'scout', power:0.25, speed:0, pitch:0,    need:0.5,  noise:1.0, blind:1},
+  rookie: {label:'Dynasty Rookie GM',desc:'Chases star power and counting stats. Reaches for big names, ignores roster needs.',
+           kind:'rookie', power:0.3, speed:0.2, pitch:0,  need:0.25, noise:1.3, blind:1, reach:1},
+  slugger:{label:'Slugger',          desc:'Builds around power. Home runs above all.',
+           power:1.0,  speed:0,   pitch:-0.15, need:0.5,  noise:1.0},
+  wheels: {label:'Speedster',        desc:'Builds around speed. Stolen bases and range.',
+           power:0,    speed:1.0, pitch:-0.15, need:0.5,  noise:1.0},
+  ace:    {label:'Rotation First',   desc:'Pitching wins championships. Arms early, bats later.',
+           power:-0.1, speed:0,   pitch:1.0,   need:0.6,  noise:0.8},
+  builder:{label:'Roster Builder',   desc:'Fills every starting slot first. Balanced and disciplined.',
+           power:0,    speed:0,   pitch:0,     need:1.3,  noise:0.8},
+  taco:   {label:'Chaos',            desc:'Unpredictable. Sometimes brilliant, usually not.',
+           power:0,    speed:0,   pitch:0,     need:-0.4, noise:2.6}
 };
-function archOf(ti){ return ARCHETYPES[(S.arch && S.arch[ti]) || 'bpa']; }
-function dealArchetypes(n, human){
-  var pool = ['bpa','slugger','wheels','ace','builder'], out = [], deck = [];
-  for(var i=0;i<n;i++){
-    if(i===human){ out.push(null); continue; }
-    if(Math.random()<0.12){ out.push('taco'); continue; }
-    if(!deck.length){
-      deck = pool.slice();
-      for(var j=deck.length-1;j>0;j--){
-        var k=Math.floor(Math.random()*(j+1)), tmp=deck[j]; deck[j]=deck[k]; deck[k]=tmp;
-      }
-    }
-    out.push(deck.pop());
+var SKILLS = {
+  easy:  {label:'Easy',   noise:1.8, need:0.6, blind:1.0, scarce:0},
+  medium:{label:'Medium', noise:1.0, need:1.0, blind:0.5, scarce:1},
+  hard:  {label:'Hard',   noise:0.6, need:1.0, blind:0.0, scarce:1}
+};
+function personaOf(ti){ return PERSONAS[(S.persona && S.persona[ti]) || 'saber']; }
+function skillOf(ti){ return SKILLS[(S.skill && S.skill[ti]) || 'hard']; }
+function shuffle(a){
+  for(var j=a.length-1;j>0;j--){
+    var k=Math.floor(Math.random()*(j+1)), tmp=a[j]; a[j]=a[k]; a[k]=tmp;
   }
-  return out;
+  return a;
+}
+function dealPersonas(n, human){
+  var pool = ['saber','scout','rookie','slugger','wheels','ace','builder'];
+  var p = [], s = [], deck = [];
+  for(var i=0;i<n;i++){
+    if(i===human){ p.push(null); s.push(null); continue; }
+    if(Math.random()<0.12){ p.push('taco'); }
+    else {
+      if(!deck.length) deck = shuffle(pool.slice());
+      p.push(deck.pop());
+    }
+    s.push('medium');
+  }
+  return {p:p, s:s};
 }
 function openStarters(t){
   var out = [];
@@ -398,7 +465,7 @@ function cpuPick(){
   var ck = clock();
   if(!ck) return;
   var t = ck.team, round = ck.round;
-  var arch = archOf(t);
+  var P = personaOf(t), sk = skillOf(t);
   var starters = openStarters(t);
   var starterSet = {};
   starters.forEach(function(si){ starterSet[si]=true; });
@@ -464,27 +531,64 @@ function cpuPick(){
     arr.forEach(function(c,i){ c._cliff = (i<arr.length-1 && (c.p.c-arr[i+1].p.c)>8) ? 4 : 0; });
   });
 
-  /* normalize power/speed leans across the shortlist */
+  /* normalize style/blind-spot components across the shortlist */
   var mxP=0.001, mxS=0.001;
+  var mxFameB=0.001, mxAvg=0.001, mnAvg=1, mxRbiPa=0.001, mxBbp=0.001;
+  var mxFameP=0.001, mxW=0.001, mxKbb=0.001, mnKbb=1e9;
   cands.forEach(function(c){
-    if(c.kind!=='bat') return;
-    var pw = c.p.q[BQ.HR]/Math.max(1,c.p.q[BQ.PA]);
-    var sp = c.p.q[BQ.SB]+10*(c.p.q[BQ.SPD]||0);
-    if(pw>mxP) mxP=pw; if(sp>mxS) mxS=sp;
+    var q = c.p.q;
+    if(c.kind==='bat'){
+      var pw = q[BQ.HR]/Math.max(1,q[BQ.PA]);
+      var sp = q[BQ.SB]+10*(q[BQ.SPD]||0);
+      if(pw>mxP) mxP=pw; if(sp>mxS) mxS=sp;
+      var fame = q[BQ.HR]+q[BQ.SB];
+      if(fame>mxFameB) mxFameB=fame;
+      if(q[BQ.AVG]>mxAvg) mxAvg=q[BQ.AVG];
+      if(q[BQ.AVG]<mnAvg) mnAvg=q[BQ.AVG];
+      var rpa = q[BQ.RBI]/Math.max(1,q[BQ.PA]);
+      if(rpa>mxRbiPa) mxRbiPa=rpa;
+      if((q[BQ.BBP]||0)>mxBbp) mxBbp=q[BQ.BBP]||0.001;
+    } else {
+      var fameP = q[PQ.W]+q[PQ.SO]/10;
+      if(fameP>mxFameP) mxFameP=fameP;
+      if(q[PQ.W]>mxW) mxW=q[PQ.W];
+      var kbb = q[PQ.KBB]||0;
+      if(kbb>mxKbb) mxKbb=kbb;
+      if(kbb<mnKbb) mnKbb=kbb;
+    }
   });
 
   var roundF = round/ROUNDS;
-  var needW = arch.need * 8 * (0.35 + 0.65*roundF);
-  var noiseW = (1.5 + 4.5*roundF) * arch.noise;
+  var needW = P.need * sk.need * 8 * (0.35 + 0.65*roundF);
+  var noiseW = (1.5 + 4.5*roundF) * P.noise * sk.noise;
+  if(P.reach) noiseW += P.reach * 3 * (1-roundF) * sk.noise; /* rookies reach early */
+  var blindW = sk.blind * (P.blind || 0);
   var best = null, bestScore = -1e18;
   cands.forEach(function(c){
-    var p = c.p, score = p.c;
+    var p = c.p, q = p.q, score = p.c;
     if(c.kind==='bat'){
-      score += arch.power * 6 * (p.q[BQ.HR]/Math.max(1,p.q[BQ.PA]))/mxP;
-      score += arch.speed * 6 * (p.q[BQ.SB]+10*(p.q[BQ.SPD]||0))/mxS;
-      if(arch.pitch<0) score += arch.pitch * 3 * (1-roundF);
+      score += P.power * 6 * (q[BQ.HR]/Math.max(1,q[BQ.PA]))/mxP;
+      score += P.speed * 6 * (q[BQ.SB]+10*(q[BQ.SPD]||0))/mxS;
+      if(P.pitch<0) score += P.pitch * 3 * (1-roundF);
+      if(blindW>0 && P.kind==='scout'){
+        /* old-school scout: pays for AVG and RBI, won't pay for walks */
+        var avgN = (q[BQ.AVG]-mnAvg)/Math.max(0.001,(mxAvg-mnAvg));
+        score += blindW*6*avgN;
+        score += blindW*4*(q[BQ.RBI]/Math.max(1,q[BQ.PA]))/mxRbiPa;
+        score -= blindW*3*((q[BQ.BBP]||0)/mxBbp);
+      } else if(blindW>0 && P.kind==='rookie'){
+        /* rookie GM: chases star power in counting stats */
+        score += blindW*8*((q[BQ.HR]+q[BQ.SB])/mxFameB);
+      }
     } else {
-      score += arch.pitch * 10 * Math.max(0, 1-round/12);
+      score += P.pitch * 10 * Math.max(0, 1-round/12);
+      if(blindW>0 && P.kind==='scout'){
+        /* scout: pays for wins, distrusts the fancy ratios */
+        score += blindW*6*(q[PQ.W]/mxW);
+        score -= blindW*3*(((q[PQ.KBB]||0)-mnKbb)/Math.max(0.001,(mxKbb-mnKbb)));
+      } else if(blindW>0 && P.kind==='rookie'){
+        score += blindW*8*((q[PQ.W]+q[PQ.SO]/10)/mxFameP);
+      }
     }
     var si = assignSlot(t, c.kind, p);
     if(si>=0 && starterSet[si]){
@@ -494,7 +598,7 @@ function cpuPick(){
         var sj=starters[s2];
         if(fits(SLOTS[sj], c.kind, p) && supply[sj]<low) low = supply[sj];
       }
-      if(low <= wait+1) score += 5*(0.5+arch.need);
+      if(low <= wait+1) score += 5*(0.5+P.need) * sk.scarce; /* easy GMs never reach */
     } else {
       score -= 6; /* bench-only fallback */
     }
@@ -515,17 +619,46 @@ function undo(){
 }
 
 /* ---------- setup view ---------- */
-var setup = { n:10, snake:true, order:[], names:[], human:0 };
+var setup = { n:10, snake:true, order:[], names:[], human:0, persona:[], skill:[] };
 function renderTeamInputs(){
   var box = $('teamNames'); box.innerHTML='';
   var keep = setup.names || [];
-  setup.names = [];
+  var keepP = setup.persona || [], keepS = setup.skill || [];
+  if(!keepP.length){
+    var dealt = dealPersonas(setup.n, setup.human);
+    keepP = dealt.p; keepS = dealt.s;
+  }
+  setup.names = []; setup.persona = []; setup.skill = [];
   for(var i=0;i<setup.n;i++){
-    var nm = keep[i] || ('Team '+(i+1));
-    setup.names.push(nm);
-    var lab = document.createElement('label');
-    lab.className='f'; lab.innerHTML = 'Team '+(i+1)+' <input type="text" data-i="'+i+'" value="'+esc(nm)+'">';
-    box.appendChild(lab);
+    (function(i){
+      var nm = keep[i] || ('Team '+(i+1));
+      var isHuman = (i === setup.human);
+      setup.names.push(nm);
+      setup.persona.push(isHuman ? null : (keepP[i] || 'saber'));
+      setup.skill.push(isHuman ? null : (keepS[i] || 'medium'));
+      var card = document.createElement('div');
+      card.className = 'teamcard';
+      var h = '<label class="f">Team '+(i+1)+(isHuman?' · you':'')+
+              ' <input type="text" data-i="'+i+'" value="'+esc(nm)+'"></label>';
+      if(isHuman){
+        h += '<div class="hint">You control this team.</div>';
+      } else {
+        h += '<div class="row">'
+          + '<label class="f">CPU style <select data-pers="'+i+'">'
+          + Object.keys(PERSONAS).map(function(k){
+              return '<option value="'+k+'"'+(setup.persona[i]===k?' selected':'')+'>'+esc(PERSONAS[k].label)+'</option>';
+            }).join('')
+          + '</select></label>'
+          + '<label class="f">Skill <select data-skill="'+i+'">'
+          + Object.keys(SKILLS).map(function(k){
+              return '<option value="'+k+'"'+(setup.skill[i]===k?' selected':'')+'>'+esc(SKILLS[k].label)+'</option>';
+            }).join('')
+          + '</select></label></div>'
+          + '<div class="hint pdesc">'+esc(PERSONAS[setup.persona[i]].desc)+'</div>';
+      }
+      card.innerHTML = h;
+      box.appendChild(card);
+    })(i);
   }
   if(setup.human >= setup.n) setup.human = 0;
   var hs = $('humanSel');
@@ -573,7 +706,17 @@ function initSetup(){
     };
   });
   $('teamNames').addEventListener('input', syncNames);
-  $('humanSel').onchange = function(){ setup.human = +this.value || 0; };
+  $('teamNames').addEventListener('change', function(e){
+    var t = e.target;
+    var i = (t.dataset.pers != null) ? +t.dataset.pers : +t.dataset.skill;
+    if(t.dataset.pers != null) setup.persona[i] = t.value;
+    else if(t.dataset.skill != null) setup.skill[i] = t.value;
+    else return;
+    var hint = t.closest('.teamcard').querySelector('.pdesc');
+    if(hint && setup.persona[i] && PERSONAS[setup.persona[i]])
+      hint.textContent = PERSONAS[setup.persona[i]].desc;
+  });
+  $('humanSel').onchange = function(){ setup.human = +this.value || 0; renderTeamInputs(); };
   $('orderList').onclick = function(e){
     var b = e.target.closest('button'); if(!b) return;
     var p = +b.dataset.p;
@@ -590,12 +733,24 @@ function initSetup(){
     }
     renderOrder();
   };
+  function randomizeCpu(){
+    var d = dealPersonas(setup.n, setup.human);
+    for(var i=0;i<setup.n;i++){
+      if(i===setup.human) continue;
+      setup.persona[i] = d.p[i];
+      var r = Math.random();
+      setup.skill[i] = r<0.25 ? 'easy' : (r<0.7 ? 'medium' : 'hard');
+    }
+    renderTeamInputs();
+  }
+  $('cpuShuffleBtn').onclick = randomizeCpu;
   $('startBtn').onclick = function(){
     syncNames();
     var teams = setup.names.map(function(nm,i){ return (nm&&nm.trim()) || ('Team '+(i+1)); });
     S = {league: $('leagueName').value.trim() || 'All-Time Draft',
          teams: teams, order: setup.order.slice(), snake: setup.snake,
-         human: setup.human, arch: dealArchetypes(teams.length, setup.human), picks: []};
+         human: setup.human, persona: setup.persona.slice(),
+         skill: setup.skill.slice(), picks: []};
     rebuildRuntime();
     save();
     initRoom();
@@ -623,64 +778,83 @@ function f2(v){ return v==null?'—':v.toFixed(2); }
 function f3(v){ return v==null?'—':v.toFixed(3); }
 function ipStr(o){ o=Math.round(o||0); return Math.floor(o/3)+'.'+(o%3); }
 function col(id,h,get,fmt){ return {id:id,h:h,get:get,fmt:fmt||f0}; }
-function bq(i,fmt){ return function(p){ return p.q[i]; }; }
+/* scope-aware q-vector getter: stats follow the Career / Peak year / 7-yr peak selector */
+function sq(i){ return function(p){ return scopeVec(p)[i]; }; }
+function yrFmt(v){ return v==null ? '—' : ''+v; }
 
 var BAT_VIEWS={
-  war:{label:'WAR',def:'c',cols:[
-    col('yrs','Yrs',bq(BQ.YRS)),col('pa','PA',bq(BQ.PA)),
-    col('c','WAR',function(p){return p.c;},f1),
-    col('p7','7-yr peak',function(p){return p.p7;},f1),
-    col('bw','Best season',function(p){return p.bw;},f1)]},
+  war:{label:'WAR',def:'c',cols:function(){
+    var cols=[col('yrs','Yrs',sq(BQ.YRS)),col('pa','PA',sq(BQ.PA))];
+    if(pool.scope==='b') cols.push(col('byr','Season',function(p){return p.byr;},yrFmt));
+    cols.push(col('c','WAR',function(p){return scopeWAR(p);},f1));
+    if(pool.scope==='c') cols.push(col('p7','7-yr peak',function(p){return p.p7;},f1),
+                                   col('bw','Best season',function(p){return p.bw;},f1));
+    return cols;}},
   bat:{label:'Batting',def:'ops',cols:[
-    col('g','G',bq(BQ.G)),col('pa','PA',bq(BQ.PA)),col('ab','AB',bq(BQ.AB)),
-    col('r','R',bq(BQ.R)),col('h','H',bq(BQ.H)),col('hr','HR',bq(BQ.HR)),
-    col('rbi','RBI',bq(BQ.RBI)),col('sb','SB',bq(BQ.SB)),
-    col('bb','BB',bq(BQ.BB)),col('so','SO',bq(BQ.SO)),
-    col('avg','AVG',bq(BQ.AVG),f3),col('obp','OBP',bq(BQ.OBP),f3),
-    col('slg','SLG',bq(BQ.SLG),f3),col('ops','OPS',bq(BQ.OPS),f3)]},
+    col('g','G',sq(BQ.G)),col('pa','PA',sq(BQ.PA)),col('ab','AB',sq(BQ.AB)),
+    col('r','R',sq(BQ.R)),col('h','H',sq(BQ.H)),col('hr','HR',sq(BQ.HR)),
+    col('rbi','RBI',sq(BQ.RBI)),col('sb','SB',sq(BQ.SB)),
+    col('bb','BB',sq(BQ.BB)),col('so','SO',sq(BQ.SO)),
+    col('avg','AVG',sq(BQ.AVG),f3),col('obp','OBP',sq(BQ.OBP),f3),
+    col('slg','SLG',sq(BQ.SLG),f3),col('ops','OPS',sq(BQ.OPS),f3)]},
   adv:{label:'Advanced',def:'woba',cols:[
-    col('bbp','BB%',bq(BQ.BBP),f1),col('kp','K%',bq(BQ.KP),f1),
-    col('bbk','BB/K',bq(BQ.BBK),f2),col('iso','ISO',bq(BQ.ISO),f3),
-    col('babip','BABIP',bq(BQ.BABIP),f3),col('woba','wOBA',bq(BQ.WOBA),f3),
-    col('wrc','wRC+',bq(BQ.WRC)),col('spd','Spd',bq(BQ.SPD),f1),
-    col('bsr','BsR',bq(BQ.BSR),f1),col('off','Off',bq(BQ.OFF),f1),
-    col('def','Def',bq(BQ.DEF),f1),
-    col('c','WAR',function(p){return p.c;},f1)]}
+    col('bbp','BB%',sq(BQ.BBP),f1),col('kp','K%',sq(BQ.KP),f1),
+    col('bbk','BB/K',sq(BQ.BBK),f2),col('iso','ISO',sq(BQ.ISO),f3),
+    col('babip','BABIP',sq(BQ.BABIP),f3),col('woba','wOBA',sq(BQ.WOBA),f3),
+    col('wrc','wRC+',sq(BQ.WRC)),col('spd','Spd',sq(BQ.SPD),f1),
+    col('bsr','BsR',sq(BQ.BSR),f1),col('off','Off',sq(BQ.OFF),f1),
+    col('def','Def',sq(BQ.DEF),f1),
+    col('c','WAR',function(p){return scopeWAR(p);},f1)]}
 };
 var PIT_VIEWS={
-  war:{label:'WAR',def:'c',cols:[
-    col('yrs','Yrs',function(p){return p.q[PQ.YRS];}),
-    col('ip','IP',function(p){return p.q[PQ.OUTS]/3;},function(v){return v==null?'—':ipStr(v*3);}),
-    col('c','WAR',function(p){return p.c;},f1),
-    col('p7','7-yr peak',function(p){return p.p7;},f1),
-    col('bw','Best season',function(p){return p.bw;},f1)]},
+  war:{label:'WAR',def:'c',cols:function(){
+    var cols=[col('yrs','Yrs',sq(PQ.YRS)),
+      col('ip','IP',sq(PQ.OUTS),function(v){return v==null?'—':ipStr(v);})];
+    if(pool.scope==='b') cols.push(col('byr','Season',function(p){return p.byr;},yrFmt));
+    cols.push(col('c','WAR',function(p){return scopeWAR(p);},f1));
+    if(pool.scope==='c') cols.push(col('p7','7-yr peak',function(p){return p.p7;},f1),
+                                   col('bw','Best season',function(p){return p.bw;},f1));
+    return cols;}},
   pit:{label:'Pitching',def:'era',cols:[
-    col('w','W',function(p){return p.q[PQ.W];}),col('l','L',function(p){return p.q[PQ.L];}),
-    col('era','ERA',function(p){return p.q[PQ.ERA];},f2),
-    col('g','G',function(p){return p.q[PQ.G];}),col('gs','GS',function(p){return p.q[PQ.GS];}),
-    col('sv','SV',function(p){return p.q[PQ.SV];}),
-    col('ip','IP',function(p){return p.q[PQ.OUTS]/3;},function(v){return v==null?'—':ipStr(v*3);}),
-    col('h','H',function(p){return p.q[PQ.H];}),col('er','ER',function(p){return p.q[PQ.ER];}),
-    col('bb','BB',function(p){return p.q[PQ.BB];}),col('so','SO',function(p){return p.q[PQ.SO];}),
-    col('whip','WHIP',function(p){return p.q[PQ.WHIP];},f3)]},
+    col('w','W',sq(PQ.W)),col('l','L',sq(PQ.L)),
+    col('era','ERA',sq(PQ.ERA),f2),
+    col('g','G',sq(PQ.G)),col('gs','GS',sq(PQ.GS)),
+    col('sv','SV',sq(PQ.SV)),
+    col('ip','IP',sq(PQ.OUTS),function(v){return v==null?'—':ipStr(v);}),
+    col('h','H',sq(PQ.H)),col('er','ER',sq(PQ.ER)),
+    col('bb','BB',sq(PQ.BB)),col('so','SO',sq(PQ.SO)),
+    col('whip','WHIP',sq(PQ.WHIP),f3)]},
   adv:{label:'Advanced',def:'fip',cols:[
-    col('k9','K/9',function(p){return p.q[PQ.K9];},f1),
-    col('bb9','BB/9',function(p){return p.q[PQ.BB9];},f1),
-    col('kbb','K/BB',function(p){return p.q[PQ.KBB];},f2),
-    col('hr9','HR/9',function(p){return p.q[PQ.HR9];},f2),
-    col('babip','BABIP',function(p){return p.q[PQ.BABIP];},f3),
-    col('lobp','LOB%',function(p){return p.q[PQ.LOBP];},f1),
-    col('fip','FIP',function(p){return p.q[PQ.FIP];},f2),
-    col('xfip','xFIP',function(p){return p.q[PQ.XFIP];},f2),
-    col('eram','ERA-',function(p){return p.q[PQ.ERAM];}),
-    col('c','WAR',function(p){return p.c;},f1)]}
+    col('k9','K/9',sq(PQ.K9),f1),
+    col('bb9','BB/9',sq(PQ.BB9),f1),
+    col('kbb','K/BB',sq(PQ.KBB),f2),
+    col('hr9','HR/9',sq(PQ.HR9),f2),
+    col('babip','BABIP',sq(PQ.BABIP),f3),
+    col('lobp','LOB%',sq(PQ.LOBP),f1),
+    col('fip','FIP',sq(PQ.FIP),f2),
+    col('xfip','xFIP',sq(PQ.XFIP),f2),
+    col('eram','ERA-',sq(PQ.ERAM)),
+    col('c','WAR',function(p){return scopeWAR(p);},f1)]}
 };
 
-var pool = {kind:'bat', view:'war', sortId:'c', dir:-1, q:'', pos:'', shown:250};
+var pool = {kind:'bat', view:'war', scope:'c', sortId:'c', dir:-1, q:'', pos:'', shown:250};
+/* Minimum playing time for the "Qualified" filter: [batter PA, pitcher outs] per scope
+   (900 IP = 2700 outs, 600 IP = 1800 outs, 162 IP = 486 outs) */
+var QUAL = {c:[3000,2700], p7:[2000,1800], b:[502,486]};
+var qualOnly = false;
+/* stat scope: career | peak year (best season) | 7-year peak.
+   scopeVec(p) returns the q-vector for the active scope; scopeWAR(p) the WAR. */
+var SCOPES = {c:'Career', b:'Peak year', p7:'7-yr peak'};
+function scopeVec(p){ return pool.scope==='b' ? p.qb : (pool.scope==='p7' ? p.q7 : p.q); }
+function scopeWAR(p){ return pool.scope==='b' ? p.bw : (pool.scope==='p7' ? p.p7 : p.c); }
 function curViews(){ return pool.kind==='bat' ? BAT_VIEWS : PIT_VIEWS; }
 function curView(){ return curViews()[pool.view]; }
+/* columns for the active table; WAR tables build scope-dependent columns */
+function viewCols(){ var v = curView(); return (typeof v.cols==='function') ? v.cols() : v.cols; }
 function curCol(){
-  var cols = curView().cols;
+  if(pool.sortId==='name') return {id:'name', get:function(p){ return p.n; }};
+  if(pool.sortId==='pos') return {id:'pos', get:function(p){ return p.p; }};
+  var cols = viewCols();
   for(var i=0;i<cols.length;i++) if(cols[i].id===pool.sortId) return cols[i];
   return cols[0];
 }
@@ -692,6 +866,11 @@ function poolList(){
     var p = src[j];
     if(drafted[p.i]) continue;
     if(q && p.n.toLowerCase().indexOf(q)<0) continue;
+    if(qualOnly){
+      var qi = pool.kind==='bat' ? BQ.PA : PQ.OUTS;
+      var qv = scopeVec(p)[qi];
+      if(!(qv >= QUAL[pool.scope][pool.kind==='bat'?0:1])) continue;
+    }
     if(pool.pos){
       if(pool.kind==='bat'){ if(batPos(p).indexOf(pool.pos)<0) continue; }
       else if(p.p!==pool.pos) continue;
@@ -705,7 +884,7 @@ function poolList(){
     vb = (vb==null) ? -1e18 : vb;
     var cmp = va>vb ? 1 : (va<vb ? -1 : 0);
     if(cmp) return cmp*dir;
-    return b.c - a.c;
+    return scopeWAR(b) - scopeWAR(a);
   });
   return arr;
 }
@@ -718,15 +897,16 @@ function renderPosFilter(){
   });
   pool.pos = '';
 }
+function thSort(cid, label, left){
+  var arrow = pool.sortId===cid ? ' <span class="arr">'+(pool.dir===-1?'▼':'▲')+'</span>' : '';
+  return '<th class="'+(left?'l ':'')+'sortable" data-cid="'+cid+'">'+label+arrow+'</th>';
+}
 function renderPool(){
   var arr = poolList();
   $('poolCount').textContent = arr.length.toLocaleString()+' available';
-  var cols = curView().cols;
-  var h = '<tr><th class="l">#</th><th class="l">Player</th><th class="l">Pos</th>';
-  cols.forEach(function(c){
-    var arrow = c.id===pool.sortId ? ' <span class="arr">'+(pool.dir===-1?'▼':'▲')+'</span>' : '';
-    h += '<th class="sortable" data-cid="'+c.id+'">'+c.h+arrow+'</th>';
-  });
+  var cols = viewCols();
+  var h = '<tr><th class="l">#</th>'+thSort('name','Player',true)+thSort('pos','Pos',true);
+  cols.forEach(function(c){ h += thSort(c.id, c.h, false); });
   h += '</tr>';
   $('poolHead').innerHTML = h;
   var tb = $('poolBody'); tb.innerHTML='';
@@ -762,6 +942,25 @@ function renderViewSeg(){
     seg.appendChild(b);
   });
 }
+/* stat-scope selector: Career | Peak year | 7-yr peak. Combines with the
+   table selector above: every table renders the active scope's numbers. */
+function renderScopeSeg(){
+  var seg = $('scopeSeg'); seg.innerHTML='';
+  Object.keys(SCOPES).forEach(function(k){
+    var b = document.createElement('button');
+    b.textContent = SCOPES[k];
+    b.dataset.s = k;
+    if(k===pool.scope) b.className='on';
+    b.onclick = function(){
+      pool.scope = k;
+      pool.sortId = curView().def;
+      pool.dir = -1;
+      pool.shown = 250;
+      renderScopeSeg(); renderPool();
+    };
+    seg.appendChild(b);
+  });
+}
 function initPool(){
   $('poolSeg').querySelectorAll('button').forEach(function(b){
     b.onclick = function(){
@@ -778,11 +977,12 @@ function initPool(){
     deb = setTimeout(function(){ pool.q = $('search').value.trim(); pool.shown=250; renderPool(); }, 200);
   });
   $('posFilter').onchange = function(){ pool.pos = this.value; pool.shown=250; renderPool(); };
+  $('qualChk').onchange = function(){ qualOnly = this.checked; pool.shown=250; renderPool(); };
   $('poolHead').onclick = function(e){
     var th = e.target.closest('th'); if(!th || !th.dataset.cid) return;
     var cid = th.dataset.cid;
     if(pool.sortId===cid) pool.dir = -pool.dir;
-    else { pool.sortId = cid; pool.dir = -1; }
+    else { pool.sortId = cid; pool.dir = (cid==='name'||cid==='pos') ? 1 : -1; }
     pool.shown = 250;
     renderPool();
   };
@@ -791,7 +991,7 @@ function initPool(){
     var tr = e.target.closest('tr'); if(!tr) return;
     openPlayer(+tr.dataset.id, pool.kind);
   };
-  renderPosFilter(); renderViewSeg();
+  renderPosFilter(); renderViewSeg(); renderScopeSeg();
 }
 
 /* ---------- player modal (Baseball-Reference style) ---------- */
@@ -917,7 +1117,7 @@ function renderRosterPills(){
     var b = document.createElement('button');
     b.className = 'small'+(ti===rosterTeam?' on':'');
     b.innerHTML = '<span class="dot" style="background:'+COLORS[ti%COLORS.length]+'"></span> '+esc(nm)+
-      ((S.arch && S.arch[ti]) ? '<span class="archtag">'+esc(archOf(ti).label)+'</span>' : '');
+      ((S.persona && S.persona[ti]) ? '<span class="archtag">'+esc(personaOf(ti).label)+' · '+esc(skillOf(ti).label)+'</span>' : '');
     b.onclick = function(){ rosterTeam = ti; renderRosters(); };
     box.appendChild(b);
   });
@@ -945,6 +1145,387 @@ function renderRosters(){
   $('rosterCard').innerHTML = h;
 }
 
+/* ---------- draft results: analysis, history, import ---------- */
+var HIST_KEY = 'atd_draft_history_v1';
+var activeModel = null;  /* {model,label} — imported file or saved draft; null = live draft */
+var resRank = 0;         /* index into model.ranked shown in the team breakdown */
+var _byId = null, _bySeason = null, _careerRank = null;
+
+function playerById(id){
+  if(!_byId){
+    _byId = {};
+    var i;
+    for(i=0;i<BAT.length;i++) _byId[BAT[i].i] = BAT[i];
+    for(i=0;i<PIT.length;i++) _byId[PIT[i].i] = PIT[i];
+  }
+  return _byId[id] || null;
+}
+/* "Name|SeasonYear" -> player id, for matching imported CSV rows to the pool */
+function seasonKeyMap(){
+  if(!_bySeason){
+    _bySeason = {};
+    [['bat',BAT],['pit',PIT]].forEach(function(pair){
+      pair[1].forEach(function(p){
+        p.s.forEach(function(s){ _bySeason[p.n+'|'+s[0]] = p.i; });
+      });
+    });
+  }
+  return _bySeason;
+}
+/* career-WAR rank of every player (0 = best): the "board" a pick is measured against */
+function careerRank(id){
+  if(!_careerRank){
+    _careerRank = {};
+    var all = BAT.concat(PIT).sort(function(a,b){ return b.c-a.c; });
+    for(var i=0;i<all.length;i++) _careerRank[all[i].i] = i;
+  }
+  return (id in _careerRank) ? _careerRank[id] : null;
+}
+/* Steal/reach of one pick: career-WAR board rank minus actual overall pick.
+   Positive = steal (fell past his board slot), negative = reach. */
+/* d = {league, teams[], picks:[{t,name,pos,yr,war,slotIdx,id,overall,round}],
+        date, origin} */
+function analyzeDraft(d){
+  var teams = d.teams.map(function(nm,ti){
+    return {ti:ti, name:nm, picks:[], war:0, swar:0, bwar:0};
+  });
+  d.picks.forEach(function(pk){
+    var T = teams[pk.t];
+    if(!T) return;
+    var rec = {name:pk.name, pos:pk.pos||'', yr:pk.yr, war:pk.war,
+               overall:pk.overall, round:pk.round, slotIdx:pk.slotIdx, steal:null};
+    var rk = (pk.id!=null && pk.id>=0) ? careerRank(pk.id) : null;
+    if(rk==null && pk.name && pk.yr!=null){
+      var hit = seasonKeyMap()[pk.name+'|'+pk.yr];
+      if(hit!=null) rk = careerRank(hit);
+    }
+    if(rk!=null) rec.steal = rk - pk.overall;
+    T.picks.push(rec);
+    T.war += pk.war;
+    if(pk.slotIdx < 17) T.swar += pk.war; else T.bwar += pk.war;
+  });
+  teams.forEach(function(T){
+    T.picks.sort(function(a,b){ return b.war-a.war; });
+    T.best = T.picks[0] || null;
+    var withVal = T.picks.filter(function(r){ return r.steal!=null; });
+    T.topSteal = withVal.slice().sort(function(a,b){ return b.steal-a.steal; })[0] || null;
+    T.topReach = withVal.slice().sort(function(a,b){ return a.steal-b.steal; })[0] || null;
+  });
+  var ranked = teams.slice().sort(function(a,b){ return b.war-a.war; });
+  var mean = ranked.reduce(function(s,T){ return s+T.war; },0) / Math.max(1,ranked.length);
+  var sd = Math.sqrt(ranked.reduce(function(s,T){ return s+(T.war-mean)*(T.war-mean); },0) /
+                     Math.max(1,ranked.length)) || 1;
+  ranked.forEach(function(T,i){
+    T.rank = i+1;
+    var z = (T.war-mean)/sd;
+    T.grade = z>=1.5?'A+':z>=1?'A':z>=0.5?'A-':z>=0?'B+':z>=-0.5?'B':z>=-1?'B-':z>=-1.5?'C':'D';
+  });
+  var all = [];
+  teams.forEach(function(T){ T.picks.forEach(function(r){ all.push({t:T, r:r}); }); });
+  var valued = all.filter(function(x){ return x.r.steal!=null; });
+  function extreme(dir){
+    return valued.slice().sort(function(a,b){ return dir*(b.r.steal-a.r.steal); })[0] || null;
+  }
+  return {league:d.league, date:d.date||null, origin:d.origin||'live',
+          teams:teams, ranked:ranked,
+          steal:extreme(1), reach:extreme(-1),
+          bestSeason:all.slice().sort(function(a,b){ return b.r.war-a.r.war; })[0] || null,
+          bestBench:ranked.slice().sort(function(a,b){ return b.bwar-a.bwar; })[0] || null};
+}
+function liveModel(){
+  var n = nTeams();
+  return analyzeDraft({
+    league:S.league, teams:S.teams,
+    picks:S.picks.map(function(pk,k){
+      return {t:pk.t, name:pk.name, pos:pk.pos, yr:pk.yr, war:pk.war,
+              slotIdx:pk.slot, id:pk.id, overall:k, round:Math.floor(k/n)+1};
+    }),
+    origin:'live'
+  });
+}
+function currentModel(){
+  if(activeModel) return activeModel;
+  if(!S || clock()) return null;
+  return {model:liveModel(), label:'This draft'};
+}
+
+/* ---------- saved drafts ---------- */
+function loadHistory(){
+  try{
+    var h = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+    return Array.isArray(h) ? h : [];
+  }catch(e){ return []; }
+}
+/* called once when a draft completes; records it for the history list */
+function recordHistory(){
+  if(!S || S._histSaved || clock()) return;
+  S._histSaved = true;
+  save();
+  var n = nTeams();
+  var rec = {hid:'h'+Date.now(), date:new Date().toISOString(), league:S.league,
+    teams:S.teams.slice(),
+    picks:S.picks.map(function(pk,k){
+      return {t:pk.t, name:pk.name, pos:pk.pos, yr:pk.yr, war:pk.war,
+              slotIdx:pk.slot, id:pk.id, overall:k, round:Math.floor(k/n)+1};
+    })};
+  var h = loadHistory();
+  h.unshift(rec);
+  try{ localStorage.setItem(HIST_KEY, JSON.stringify(h.slice(0,50))); }catch(e){}
+}
+
+/* ---------- results CSV: export + import ---------- */
+function resultsCsv(){
+  var n = nTeams();
+  var rows = ['Round,Overall,Team,Player,Pos,Year,WAR,Slot,Season line'];
+  S.picks.forEach(function(pk,k){
+    var r = Math.floor(k/n)+1;
+    rows.push([r, k+1, '"'+S.teams[pk.t].replace(/"/g,'""')+'"',
+      '"'+pk.name.replace(/"/g,'""')+'"', pk.pos, pk.yr, pk.war.toFixed(1),
+      SLOTS[pk.slot], '"'+pk.line.replace(/"/g,'""')+'"'].join(','));
+  });
+  return rows.join('\n');
+}
+/* minimal CSV parser (handles quoted fields); returns a draft object or null */
+function parseResultsCsv(text){
+  var rows = [], row = [], cur = '', inQ = false, i, ch;
+  for(i=0;i<text.length;i++){
+    ch = text[i];
+    if(inQ){
+      if(ch==='"'){ if(text[i+1]==='"'){ cur+='"'; i++; } else inQ = false; }
+      else cur += ch;
+    }
+    else if(ch==='"') inQ = true;
+    else if(ch===','){ row.push(cur); cur=''; }
+    else if(ch==='\n'){ row.push(cur); rows.push(row); row=[]; cur=''; }
+    else if(ch==='\r'){ /* skip */ }
+    else cur += ch;
+  }
+  if(cur!=='' || row.length){ row.push(cur); rows.push(row); }
+  rows = rows.filter(function(r){ return r.length>1 || (r.length===1 && r[0].trim()!==''); });
+  if(!rows.length) return null;
+  var head = rows[0].map(function(h){ return h.trim().toLowerCase(); });
+  function ci(name){
+    for(var k=0;k<head.length;k++) if(head[k]===name || head[k].indexOf(name)>=0) return k;
+    return -1;
+  }
+  var cTeam=ci('team'), cPlayer=ci('player'), cPos=ci('pos'), cYear=ci('year'),
+      cWar=ci('war'), cSlot=ci('slot'), cOverall=ci('overall'), cRound=ci('round');
+  if(cTeam<0 || cPlayer<0 || cYear<0 || cWar<0) return null;
+  var teams = [], tmap = {};
+  rows.slice(1).forEach(function(r){
+    var nm = (r[cTeam]||'').trim();
+    if(nm && !(nm in tmap)){ tmap[nm] = teams.length; teams.push(nm); }
+  });
+  if(!teams.length) return null;
+  var picks = [];
+  rows.slice(1).forEach(function(r){
+    var nm = (r[cTeam]||'').trim();
+    if(!(nm in tmap)) return;
+    var yr = parseInt(r[cYear],10), war = parseFloat(r[cWar]);
+    if(isNaN(yr) || isNaN(war)) return;
+    var slotStr = (cSlot>=0 ? r[cSlot] : '').trim();
+    var slotIdx = SLOTS.indexOf(slotStr);
+    if(slotIdx < 0) slotIdx = 17;
+    picks.push({t:tmap[nm], name:(r[cPlayer]||'').trim(),
+      pos:cPos>=0 ? (r[cPos]||'').trim() : '', yr:yr, war:war,
+      slotIdx:slotIdx, id:-1,
+      overall:cOverall>=0 ? parseInt(r[cOverall],10)-1 : -1,
+      round:cRound>=0 ? parseInt(r[cRound],10) : 0});
+  });
+  if(!picks.length) return null;
+  if(cOverall>=0) picks.sort(function(a,b){ return a.overall-b.overall; });
+  var n = teams.length;
+  picks.forEach(function(p,ix){
+    if(!(p.overall>=0)) p.overall = ix;
+    if(!(p.round>0)) p.round = Math.floor(p.overall/n)+1;
+  });
+  /* draft order = round-1 pick sequence; snake if round 2 is its reverse */
+  function seqFor(rd){
+    return picks.filter(function(p){ return p.round===rd; })
+                .sort(function(a,b){ return a.overall-b.overall; })
+                .map(function(p){ return p.t; });
+  }
+  var order = seqFor(1), seq2 = seqFor(2);
+  var snake = order.length>0 && seq2.length>0 &&
+              seq2.join(',') === order.slice().reverse().join(',');
+  return {league:'Imported draft', teams:teams, order:order, snake:snake,
+          picks:picks, date:new Date().toISOString(), origin:'import'};
+}
+
+/* ---------- results rendering ---------- */
+function gradeCls(g){ return 'g'+g.replace('+','p').replace('-','m'); }
+function fmtDate(iso){
+  try{
+    var d = new Date(iso);
+    return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+', '+
+           d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+  }catch(e){ return ''; }
+}
+function showTab(t){
+  document.querySelectorAll('.tabs button').forEach(function(x){
+    x.classList.toggle('on', x.dataset.tab===t);
+  });
+  ['players','board','rosters','results'].forEach(function(x){
+    $('tab-'+x).classList.toggle('hidden', x!==t);
+  });
+  if(t==='board') renderBoard();
+  if(t==='rosters') renderRosters();
+  if(t==='results') renderResults();
+}
+function renderResults(){
+  var box = $('tab-results');
+  var cm = currentModel();
+  var h = '';
+  if(cm){
+    var m = cm.model;
+    if(resRank >= m.ranked.length) resRank = 0;
+    h += '<div class="card">';
+    h += '<div class="row" style="justify-content:space-between;margin-bottom:12px">'+
+         '<h2 style="margin:0">Results · '+esc(m.league)+'</h2>';
+    if(activeModel){
+      h += '<span><span class="hint">'+esc(cm.label)+'</span> '+
+           '<button class="small" id="backLive">Back to live draft</button></span>';
+    }
+    h += '</div>';
+    h += '<table class="stats"><thead><tr><th class="l">#</th><th class="l">Team</th>'+
+         '<th>Grade</th><th>Total WAR</th><th>Starters</th><th>Bench</th>'+
+         '<th class="l">Best pick</th></tr></thead><tbody>';
+    m.ranked.forEach(function(T){
+      h += '<tr><td class="l">'+T.rank+'</td><td class="l"><b>'+esc(T.name)+'</b></td>'+
+        '<td><span class="grade '+gradeCls(T.grade)+'">'+T.grade+'</span></td>'+
+        '<td><b>'+T.war.toFixed(1)+'</b></td><td>'+T.swar.toFixed(1)+'</td>'+
+        '<td>'+T.bwar.toFixed(1)+'</td>'+
+        '<td class="l">'+(T.best ? esc(T.best.name)+' <span class="hint">'+T.best.yr+
+          ' · '+T.best.war.toFixed(1)+' WAR · pick '+(T.best.overall+1)+'</span>' : '—')+'</td></tr>';
+    });
+    h += '</tbody></table>';
+    h += '<h3 style="margin:16px 0 8px;color:var(--maroon)">Draft superlatives</h3><div class="suprow">';
+    function sup(t, inner){
+      return '<div class="sup"><div class="suptitle">'+t+'</div><div>'+inner+'</div></div>';
+    }
+    function pkLine(x){
+      return '<b>'+esc(x.r.name)+'</b> <span class="hint">'+x.r.yr+'</span><br>'+
+             '<span class="hint">'+esc(x.t.name)+' · pick '+(x.r.overall+1)+'</span>';
+    }
+    if(m.steal) h += sup('Biggest steal', pkLine(m.steal)+
+      '<br><span class="steal">+'+m.steal.r.steal+' spots vs the board</span>');
+    if(m.reach) h += sup('Biggest reach', pkLine(m.reach)+
+      '<br><span class="reach">'+m.reach.r.steal+' spots vs the board</span>');
+    if(m.bestSeason) h += sup('Best season drafted', pkLine(m.bestSeason)+
+      '<br><b>'+m.bestSeason.r.war.toFixed(1)+' WAR</b>');
+    if(m.bestBench) h += sup('Deepest bench', '<b>'+esc(m.bestBench.name)+'</b>'+
+      '<br><b>'+m.bestBench.bwar.toFixed(1)+' WAR</b> <span class="hint">from the bench</span>');
+    h += '</div>';
+    h += '<h3 style="margin:16px 0 8px;color:var(--maroon)">Team breakdown</h3>';
+    h += '<div class="teampills" id="resPills"></div><div id="resTeamCard"></div>';
+    h += '</div>';
+  } else {
+    h += '<div class="card"><h2>Results</h2><div class="hint">Finish the draft to see the full '+
+         'analysis here: team grades, steals and reaches, and a team-by-team breakdown. '+
+         'You can also upload a previously exported results file below.</div></div>';
+  }
+  h += '<div class="card"><h2>Import &amp; history</h2>'+
+    '<div class="row"><button id="importBtn">Upload results CSV</button>'+
+    '<input type="file" id="importFile" accept=".csv,text/csv" class="hidden">'+
+    '<span class="hint">Upload a results file exported from this app (the Export button) to analyze it here.</span></div>'+
+    '<div id="histList" style="margin-top:12px"></div></div>';
+  box.innerHTML = h;
+  if(cm){
+    var m2 = cm.model;
+    var pills = $('resPills');
+    m2.ranked.forEach(function(T,i){
+      var b = document.createElement('button');
+      b.className = 'small'+(i===resRank ? ' on' : '');
+      b.innerHTML = '<span class="grade '+gradeCls(T.grade)+'" style="margin-right:6px">'+
+                    T.grade+'</span> '+esc(T.name);
+      b.onclick = (function(ii){ return function(){ resRank = ii; renderResults(); }; })(i);
+      pills.appendChild(b);
+    });
+    renderResTeam(m2);
+    var bl = $('backLive');
+    if(bl) bl.onclick = function(){ activeModel = null; resRank = 0; renderResults(); };
+  }
+  $('importBtn').onclick = function(){ $('importFile').click(); };
+  $('importFile').onchange = function(){
+    var f = this.files && this.files[0];
+    if(!f) return;
+    var rd = new FileReader();
+    rd.onload = function(){
+      var d = parseResultsCsv(String(rd.result || ''));
+      if(!d){ alert('Could not read that file. Upload a results CSV exported from this app.'); return; }
+      activeModel = {model:analyzeDraft(d), label:'Imported file · '+f.name};
+      resRank = 0;
+      showTab('results');
+      window.scrollTo(0,0);
+    };
+    rd.readAsText(f);
+    this.value = '';
+  };
+  renderHistList();
+}
+function renderResTeam(m){
+  var T = m.ranked[resRank];
+  var box = $('resTeamCard');
+  if(!T){ box.innerHTML = ''; return; }
+  var h = '<div class="card" style="margin:10px 0 0"><div class="row" style="justify-content:space-between">'+
+    '<h2 style="margin:0">'+esc(T.name)+' <span class="grade '+gradeCls(T.grade)+'">'+T.grade+'</span></h2>'+
+    '<span class="hint">'+T.war.toFixed(1)+' total WAR · '+T.swar.toFixed(1)+
+    ' starters · '+T.bwar.toFixed(1)+' bench</span></div>';
+  h += '<table class="stats" style="margin-top:10px"><thead><tr><th class="l">Slot</th>'+
+       '<th class="l">Player</th><th>Year</th><th>WAR</th><th>Pick</th>'+
+       '<th class="l">Value</th></tr></thead><tbody>';
+  T.picks.forEach(function(r){
+    var v;
+    if(r.steal==null) v = '<span class="hint">—</span>';
+    else if(r.steal>=20) v = '<span class="steal">Steal +'+r.steal+'</span>';
+    else if(r.steal<=-20) v = '<span class="reach">Reach '+r.steal+'</span>';
+    else v = '<span class="hint">'+(r.steal>0?'+':'')+r.steal+'</span>';
+    h += '<tr><td class="l"><span class="pospill">'+esc(SLOTS[r.slotIdx]||'?')+'</span></td>'+
+      '<td class="l"><b>'+esc(r.name)+'</b> <span class="hint">'+esc(r.pos)+'</span></td>'+
+      '<td>'+r.yr+'</td><td><b>'+r.war.toFixed(1)+'</b></td><td>'+(r.overall+1)+'</td>'+
+      '<td class="l">'+v+'</td></tr>';
+  });
+  box.innerHTML = h+'</tbody></table></div>';
+}
+function renderHistList(){
+  var box = $('histList');
+  var list = loadHistory();
+  var s = '<h3 style="margin:4px 0 8px;color:var(--maroon)">Saved drafts</h3>';
+  if(!list.length) s += '<div class="hint">Completed drafts are saved here automatically.</div>';
+  list.forEach(function(rec){
+    s += '<div class="histrow"><span class="dot" style="background:var(--maroon)"></span>'+
+      '<b>'+esc(rec.league)+'</b><span class="hint">'+fmtDate(rec.date)+' · '+
+      rec.teams.length+' teams · '+rec.picks.length+' picks</span>'+
+      '<span style="flex:1"></span>'+
+      '<button class="small" data-hv="'+rec.hid+'">View</button> '+
+      '<button class="small" data-hd="'+rec.hid+'">Delete</button></div>';
+  });
+  box.innerHTML = s;
+  box.onclick = function(e){
+    var b = e.target.closest('button');
+    if(!b) return;
+    var items = loadHistory();
+    if(b.dataset.hv){
+      var rec = null;
+      items.forEach(function(r){ if(r.hid===b.dataset.hv) rec = r; });
+      if(rec){
+        activeModel = {model:analyzeDraft(rec), label:rec.league+' · '+fmtDate(rec.date)};
+        resRank = 0;
+        renderResults();
+        window.scrollTo(0,0);
+      }
+    } else if(b.dataset.hd){
+      if(confirm('Delete this saved draft?')){
+        try{
+          localStorage.setItem(HIST_KEY,
+            JSON.stringify(items.filter(function(r){ return r.hid!==b.dataset.hd; })));
+        }catch(e2){}
+        renderResults();
+      }
+    }
+  };
+}
+
 /* ---------- clock / tabs / export ---------- */
 function renderClock(){
   var ck = clock();
@@ -954,46 +1535,34 @@ function renderClock(){
     $('clockDot').style.background = '#fff';
     $('autoBtn').disabled = true;
     $('simBtn').disabled = true;
+    $('simAllBtn').disabled = true;
     $('cpuBtn').disabled = true;
     $('doneBanner').classList.remove('hidden');
+    recordHistory();
+    if(!$('tab-results').classList.contains('hidden')) renderResults();
     return;
   }
   $('doneBanner').classList.add('hidden');
   $('autoBtn').disabled = false;
   $('simBtn').disabled = false;
+  $('simAllBtn').disabled = false;
   $('cpuBtn').disabled = false;
   var humanTurn = ck.team === S.human;
   $('pickInfo').textContent = S.league+' · Round '+ck.round+' · Pick '+(ck.overall+1)+' of '+totalPicks()+
     ' ('+(S.snake?'snake':'linear')+')';
   $('clockTeam').textContent = humanTurn
     ? 'Your pick: '+S.teams[ck.team]
-    : 'CPU drafting: '+S.teams[ck.team]+' · '+archOf(ck.team).label+'…';
+    : 'CPU drafting: '+S.teams[ck.team]+' · '+personaOf(ck.team).label+' ('+skillOf(ck.team).label+')…';
   $('clockDot').style.background = COLORS[ck.team%COLORS.length];
   $('cpuBtn').textContent = cpuPaused ? 'Resume CPU' : 'Pause CPU';
 }
 function initTabs(){
   document.querySelectorAll('.tabs button').forEach(function(b){
-    b.onclick = function(){
-      document.querySelectorAll('.tabs button').forEach(function(x){ x.classList.remove('on'); });
-      b.classList.add('on');
-      ['players','board','rosters'].forEach(function(t){
-        $('tab-'+t).classList.toggle('hidden', t!==b.dataset.tab);
-      });
-      if(b.dataset.tab==='board') renderBoard();
-      if(b.dataset.tab==='rosters') renderRosters();
-    };
+    b.onclick = function(){ showTab(b.dataset.tab); };
   });
 }
 function exportCsv(){
-  var n = nTeams();
-  var rows = ['Round,Overall,Team,Player,Pos,Year,WAR,Slot,Season line'];
-  S.picks.forEach(function(pk,k){
-    var r = Math.floor(k/n)+1;
-    rows.push([r, k+1, '"'+S.teams[pk.t].replace(/"/g,'""')+'"',
-      '"'+pk.name.replace(/"/g,'""')+'"', pk.pos, pk.yr, pk.war.toFixed(1),
-      SLOTS[pk.slot], '"'+pk.line.replace(/"/g,'""')+'"'].join(','));
-  });
-  var blob = new Blob([rows.join('\n')], {type:'text/csv'});
+  var blob = new Blob([resultsCsv()], {type:'text/csv'});
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'all-time-draft-results.csv';
@@ -1003,6 +1572,7 @@ function exportCsv(){
 function renderAll(){
   renderClock(); renderPool(); renderBoard();
   if(!$('tab-rosters').classList.contains('hidden')) renderRosters();
+  if(!$('tab-results').classList.contains('hidden')) renderResults();
   if(modalP) updateDraftBtn();
   scheduleCpu();
 }
@@ -1010,6 +1580,7 @@ function initRoom(){
   initTabs(); initPool(); initModal();
   $('autoBtn').onclick = autoPick;
   $('simBtn').onclick = simToHuman;
+  $('simAllBtn').onclick = simAll;
   $('cpuBtn').onclick = function(){
     cpuPaused = !cpuPaused;
     if(!cpuPaused) scheduleCpu();
@@ -1021,6 +1592,7 @@ function initRoom(){
     undo();
   };
   $('exportBtn').onclick = exportCsv;
+  $('seeResults').onclick = function(){ showTab('results'); window.scrollTo(0,0); };
   $('newBtn').onclick = function(){
     if(confirm('Start over with a new draft? This clears all picks.')){
       try{ localStorage.removeItem(SAVE_KEY); }catch(e){}
@@ -1035,7 +1607,10 @@ var saved = loadSaved();
 if(saved){
   S = saved;
   if(S.human == null) S.human = 0;
-  if(!S.arch) S.arch = dealArchetypes(S.teams.length, S.human);
+  if(!S.persona || !S.skill){
+    var dp = dealPersonas(S.teams.length, S.human);
+    S.persona = dp.p; S.skill = dp.s;
+  }
   rebuildRuntime();
   if(rosterTeam >= S.teams.length) rosterTeam = 0;
   $('setupView').classList.add('hidden');
@@ -1050,7 +1625,7 @@ if(saved){
 if(typeof DRAFT_DATA !== 'undefined' && DRAFT_DATA){
   bootDraftRoom(DRAFT_DATA);
 } else if(typeof fetch !== 'undefined'){
-  fetch('draft_data.json').then(function(r){
+  fetch('draft_data.json?v=b24f52b1bf').then(function(r){
     if(!r.ok) throw new Error('http '+r.status);
     return r.json();
   }).then(function(d){ bootDraftRoom(d); }).catch(function(){
