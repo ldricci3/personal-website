@@ -177,6 +177,7 @@
         <span class="seg" id="poolSeg">
           <button data-v="bat" class="on">Batters</button><button data-v="pit">Pitchers</button>
         </span>
+        <span class="seg" id="scopeSeg"></span>
         <span class="seg" id="viewSeg"></span>
         <input type="text" id="search" placeholder="Search players…" style="width:200px">
         <select id="posFilter"><option value="">All positions</option></select>
@@ -758,64 +759,77 @@ function f2(v){ return v==null?'—':v.toFixed(2); }
 function f3(v){ return v==null?'—':v.toFixed(3); }
 function ipStr(o){ o=Math.round(o||0); return Math.floor(o/3)+'.'+(o%3); }
 function col(id,h,get,fmt){ return {id:id,h:h,get:get,fmt:fmt||f0}; }
-function bq(i,fmt){ return function(p){ return p.q[i]; }; }
+/* scope-aware q-vector getter: stats follow the Career / Peak year / 7-yr peak selector */
+function sq(i){ return function(p){ return scopeVec(p)[i]; }; }
+function yrFmt(v){ return v==null ? '—' : ''+v; }
 
 var BAT_VIEWS={
-  war:{label:'WAR',def:'c',cols:[
-    col('yrs','Yrs',bq(BQ.YRS)),col('pa','PA',bq(BQ.PA)),
-    col('c','WAR',function(p){return p.c;},f1),
-    col('p7','7-yr peak',function(p){return p.p7;},f1),
-    col('bw','Best season',function(p){return p.bw;},f1)]},
+  war:{label:'WAR',def:'c',cols:function(){
+    var cols=[col('yrs','Yrs',sq(BQ.YRS)),col('pa','PA',sq(BQ.PA))];
+    if(pool.scope==='b') cols.push(col('byr','Season',function(p){return p.byr;},yrFmt));
+    cols.push(col('c','WAR',function(p){return scopeWAR(p);},f1));
+    if(pool.scope==='c') cols.push(col('p7','7-yr peak',function(p){return p.p7;},f1),
+                                   col('bw','Best season',function(p){return p.bw;},f1));
+    return cols;}},
   bat:{label:'Batting',def:'ops',cols:[
-    col('g','G',bq(BQ.G)),col('pa','PA',bq(BQ.PA)),col('ab','AB',bq(BQ.AB)),
-    col('r','R',bq(BQ.R)),col('h','H',bq(BQ.H)),col('hr','HR',bq(BQ.HR)),
-    col('rbi','RBI',bq(BQ.RBI)),col('sb','SB',bq(BQ.SB)),
-    col('bb','BB',bq(BQ.BB)),col('so','SO',bq(BQ.SO)),
-    col('avg','AVG',bq(BQ.AVG),f3),col('obp','OBP',bq(BQ.OBP),f3),
-    col('slg','SLG',bq(BQ.SLG),f3),col('ops','OPS',bq(BQ.OPS),f3)]},
+    col('g','G',sq(BQ.G)),col('pa','PA',sq(BQ.PA)),col('ab','AB',sq(BQ.AB)),
+    col('r','R',sq(BQ.R)),col('h','H',sq(BQ.H)),col('hr','HR',sq(BQ.HR)),
+    col('rbi','RBI',sq(BQ.RBI)),col('sb','SB',sq(BQ.SB)),
+    col('bb','BB',sq(BQ.BB)),col('so','SO',sq(BQ.SO)),
+    col('avg','AVG',sq(BQ.AVG),f3),col('obp','OBP',sq(BQ.OBP),f3),
+    col('slg','SLG',sq(BQ.SLG),f3),col('ops','OPS',sq(BQ.OPS),f3)]},
   adv:{label:'Advanced',def:'woba',cols:[
-    col('bbp','BB%',bq(BQ.BBP),f1),col('kp','K%',bq(BQ.KP),f1),
-    col('bbk','BB/K',bq(BQ.BBK),f2),col('iso','ISO',bq(BQ.ISO),f3),
-    col('babip','BABIP',bq(BQ.BABIP),f3),col('woba','wOBA',bq(BQ.WOBA),f3),
-    col('wrc','wRC+',bq(BQ.WRC)),col('spd','Spd',bq(BQ.SPD),f1),
-    col('bsr','BsR',bq(BQ.BSR),f1),col('off','Off',bq(BQ.OFF),f1),
-    col('def','Def',bq(BQ.DEF),f1),
-    col('c','WAR',function(p){return p.c;},f1)]}
+    col('bbp','BB%',sq(BQ.BBP),f1),col('kp','K%',sq(BQ.KP),f1),
+    col('bbk','BB/K',sq(BQ.BBK),f2),col('iso','ISO',sq(BQ.ISO),f3),
+    col('babip','BABIP',sq(BQ.BABIP),f3),col('woba','wOBA',sq(BQ.WOBA),f3),
+    col('wrc','wRC+',sq(BQ.WRC)),col('spd','Spd',sq(BQ.SPD),f1),
+    col('bsr','BsR',sq(BQ.BSR),f1),col('off','Off',sq(BQ.OFF),f1),
+    col('def','Def',sq(BQ.DEF),f1),
+    col('c','WAR',function(p){return scopeWAR(p);},f1)]}
 };
 var PIT_VIEWS={
-  war:{label:'WAR',def:'c',cols:[
-    col('yrs','Yrs',function(p){return p.q[PQ.YRS];}),
-    col('ip','IP',function(p){return p.q[PQ.OUTS]/3;},function(v){return v==null?'—':ipStr(v*3);}),
-    col('c','WAR',function(p){return p.c;},f1),
-    col('p7','7-yr peak',function(p){return p.p7;},f1),
-    col('bw','Best season',function(p){return p.bw;},f1)]},
+  war:{label:'WAR',def:'c',cols:function(){
+    var cols=[col('yrs','Yrs',sq(PQ.YRS)),
+      col('ip','IP',sq(PQ.OUTS),function(v){return v==null?'—':ipStr(v);})];
+    if(pool.scope==='b') cols.push(col('byr','Season',function(p){return p.byr;},yrFmt));
+    cols.push(col('c','WAR',function(p){return scopeWAR(p);},f1));
+    if(pool.scope==='c') cols.push(col('p7','7-yr peak',function(p){return p.p7;},f1),
+                                   col('bw','Best season',function(p){return p.bw;},f1));
+    return cols;}},
   pit:{label:'Pitching',def:'era',cols:[
-    col('w','W',function(p){return p.q[PQ.W];}),col('l','L',function(p){return p.q[PQ.L];}),
-    col('era','ERA',function(p){return p.q[PQ.ERA];},f2),
-    col('g','G',function(p){return p.q[PQ.G];}),col('gs','GS',function(p){return p.q[PQ.GS];}),
-    col('sv','SV',function(p){return p.q[PQ.SV];}),
-    col('ip','IP',function(p){return p.q[PQ.OUTS]/3;},function(v){return v==null?'—':ipStr(v*3);}),
-    col('h','H',function(p){return p.q[PQ.H];}),col('er','ER',function(p){return p.q[PQ.ER];}),
-    col('bb','BB',function(p){return p.q[PQ.BB];}),col('so','SO',function(p){return p.q[PQ.SO];}),
-    col('whip','WHIP',function(p){return p.q[PQ.WHIP];},f3)]},
+    col('w','W',sq(PQ.W)),col('l','L',sq(PQ.L)),
+    col('era','ERA',sq(PQ.ERA),f2),
+    col('g','G',sq(PQ.G)),col('gs','GS',sq(PQ.GS)),
+    col('sv','SV',sq(PQ.SV)),
+    col('ip','IP',sq(PQ.OUTS),function(v){return v==null?'—':ipStr(v);}),
+    col('h','H',sq(PQ.H)),col('er','ER',sq(PQ.ER)),
+    col('bb','BB',sq(PQ.BB)),col('so','SO',sq(PQ.SO)),
+    col('whip','WHIP',sq(PQ.WHIP),f3)]},
   adv:{label:'Advanced',def:'fip',cols:[
-    col('k9','K/9',function(p){return p.q[PQ.K9];},f1),
-    col('bb9','BB/9',function(p){return p.q[PQ.BB9];},f1),
-    col('kbb','K/BB',function(p){return p.q[PQ.KBB];},f2),
-    col('hr9','HR/9',function(p){return p.q[PQ.HR9];},f2),
-    col('babip','BABIP',function(p){return p.q[PQ.BABIP];},f3),
-    col('lobp','LOB%',function(p){return p.q[PQ.LOBP];},f1),
-    col('fip','FIP',function(p){return p.q[PQ.FIP];},f2),
-    col('xfip','xFIP',function(p){return p.q[PQ.XFIP];},f2),
-    col('eram','ERA-',function(p){return p.q[PQ.ERAM];}),
-    col('c','WAR',function(p){return p.c;},f1)]}
+    col('k9','K/9',sq(PQ.K9),f1),
+    col('bb9','BB/9',sq(PQ.BB9),f1),
+    col('kbb','K/BB',sq(PQ.KBB),f2),
+    col('hr9','HR/9',sq(PQ.HR9),f2),
+    col('babip','BABIP',sq(PQ.BABIP),f3),
+    col('lobp','LOB%',sq(PQ.LOBP),f1),
+    col('fip','FIP',sq(PQ.FIP),f2),
+    col('xfip','xFIP',sq(PQ.XFIP),f2),
+    col('eram','ERA-',sq(PQ.ERAM)),
+    col('c','WAR',function(p){return scopeWAR(p);},f1)]}
 };
 
-var pool = {kind:'bat', view:'war', sortId:'c', dir:-1, q:'', pos:'', shown:250};
+var pool = {kind:'bat', view:'war', scope:'c', sortId:'c', dir:-1, q:'', pos:'', shown:250};
+/* stat scope: career | peak year (best season) | 7-year peak.
+   scopeVec(p) returns the q-vector for the active scope; scopeWAR(p) the WAR. */
+var SCOPES = {c:'Career', b:'Peak year', p7:'7-yr peak'};
+function scopeVec(p){ return pool.scope==='b' ? p.qb : (pool.scope==='p7' ? p.q7 : p.q); }
+function scopeWAR(p){ return pool.scope==='b' ? p.bw : (pool.scope==='p7' ? p.p7 : p.c); }
 function curViews(){ return pool.kind==='bat' ? BAT_VIEWS : PIT_VIEWS; }
 function curView(){ return curViews()[pool.view]; }
+/* columns for the active table; WAR tables build scope-dependent columns */
+function viewCols(){ var v = curView(); return (typeof v.cols==='function') ? v.cols() : v.cols; }
 function curCol(){
-  var cols = curView().cols;
+  var cols = viewCols();
   for(var i=0;i<cols.length;i++) if(cols[i].id===pool.sortId) return cols[i];
   return cols[0];
 }
@@ -840,7 +854,7 @@ function poolList(){
     vb = (vb==null) ? -1e18 : vb;
     var cmp = va>vb ? 1 : (va<vb ? -1 : 0);
     if(cmp) return cmp*dir;
-    return b.c - a.c;
+    return scopeWAR(b) - scopeWAR(a);
   });
   return arr;
 }
@@ -856,7 +870,7 @@ function renderPosFilter(){
 function renderPool(){
   var arr = poolList();
   $('poolCount').textContent = arr.length.toLocaleString()+' available';
-  var cols = curView().cols;
+  var cols = viewCols();
   var h = '<tr><th class="l">#</th><th class="l">Player</th><th class="l">Pos</th>';
   cols.forEach(function(c){
     var arrow = c.id===pool.sortId ? ' <span class="arr">'+(pool.dir===-1?'▼':'▲')+'</span>' : '';
@@ -897,6 +911,25 @@ function renderViewSeg(){
     seg.appendChild(b);
   });
 }
+/* stat-scope selector: Career | Peak year | 7-yr peak. Combines with the
+   table selector above: every table renders the active scope's numbers. */
+function renderScopeSeg(){
+  var seg = $('scopeSeg'); seg.innerHTML='';
+  Object.keys(SCOPES).forEach(function(k){
+    var b = document.createElement('button');
+    b.textContent = SCOPES[k];
+    b.dataset.s = k;
+    if(k===pool.scope) b.className='on';
+    b.onclick = function(){
+      pool.scope = k;
+      pool.sortId = curView().def;
+      pool.dir = -1;
+      pool.shown = 250;
+      renderScopeSeg(); renderPool();
+    };
+    seg.appendChild(b);
+  });
+}
 function initPool(){
   $('poolSeg').querySelectorAll('button').forEach(function(b){
     b.onclick = function(){
@@ -926,7 +959,7 @@ function initPool(){
     var tr = e.target.closest('tr'); if(!tr) return;
     openPlayer(+tr.dataset.id, pool.kind);
   };
-  renderPosFilter(); renderViewSeg();
+  renderPosFilter(); renderViewSeg(); renderScopeSeg();
 }
 
 /* ---------- player modal (Baseball-Reference style) ---------- */
