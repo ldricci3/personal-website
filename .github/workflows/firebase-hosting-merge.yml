@@ -1,0 +1,19 @@
+# Deploy to Firebase Hosting's live channel on every merge to master.
+# Generated equivalent of `firebase init hosting:github`.
+
+name: Deploy to Firebase Hosting on merge
+'on':
+  push:
+    branches:
+      - master
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PERSONAL_WEBSITE_A7C98 }}
+          channelId: live
+          projectId: personal-website-a7c98
